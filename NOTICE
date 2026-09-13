@@ -1,0 +1,32 @@
+LibrePower - Powerwall
+Copyright (C) 2026 LibrePower contributors
+
+This program is licensed under the GNU General Public License v3.0 or later.
+See LICENSE for the full text.
+
+────────────────────────────────────────────────────────────────────────────
+Dependency on LibrePower core
+────────────────────────────────────────────────────────────────────────────
+
+This integration requires and imports directly from the ``librepower`` core
+integration (also GPLv3-or-later, same authorship). ``powerwall.py`` imports
+``BatteryClient``, ``BatterySnapshot``, ``BatteryCapabilities``, and the
+generic battery exception types from ``custom_components.librepower.battery``
+at runtime, via the shared ``custom_components`` namespace package. This is
+GPL-to-GPL, so there is no license-compatibility question here (unlike the
+MIT exception documented in core's own NOTICE) - both repositories carry the
+same license.
+
+────────────────────────────────────────────────────────────────────────────
+Runtime dependency (not vendored, not modified)
+────────────────────────────────────────────────────────────────────────────
+
+This project depends on, but does not include the source of:
+  - pypowerwall (MIT, Copyright Jason Cox) - local Powerwall TEDAPI/v1r
+    transport. Full credit for the actual protocol work belongs there; this
+    repository only wraps it as a thin adapter conforming to core's contract.
+
+Depending on a permissively-licensed library at runtime imposes no GPL
+obligation on that library itself; GPL's copyleft applies to this project's
+own source, not to libraries invoked through an ordinary dependency
+mechanism.
