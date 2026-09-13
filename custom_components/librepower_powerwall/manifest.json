@@ -4,9 +4,9 @@
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["librepower"],
-  "documentation": "https://github.com/YOURNAME/librepower-powerwall",
+  "documentation": "https://github.com/no5tyle/librepower-powerwall",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/YOURNAME/librepower-powerwall/issues",
+  "issue_tracker": "https://github.com/no5tyle/librepower-powerwall/issues",
   "requirements": ["pypowerwall>=0.14.0"],
   "version": "0.1.0"
 }

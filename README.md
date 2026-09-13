@@ -1,6 +1,6 @@
 # LibrePower - Powerwall
 
-The Tesla Powerwall battery adapter for [LibrePower](https://github.com/YOURNAME/librepower).
+The Tesla Powerwall battery adapter for [LibrePower](https://github.com/no5tyle/librepower).
 
 This is intentionally a small, separate repo. It exists so that installing
 Powerwall support doesn't mean receiving updates for Sigenergy, Sungrow, or
@@ -9,7 +9,7 @@ problem that motivated splitting this out of a single monolithic integration
 in the first place.
 
 **This repo does nothing on its own.** It requires [LibrePower
-core](https://github.com/YOURNAME/librepower) to be installed and set up
+core](https://github.com/no5tyle/librepower) to be installed and set up
 first — that's where the optimiser, pricing, and dashboard live. This repo's
 only job is connecting to a Powerwall and reporting its telemetry and control
 surface to core.
