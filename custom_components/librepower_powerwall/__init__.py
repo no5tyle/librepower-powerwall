@@ -22,11 +22,15 @@ from custom_components.librepower import async_register_battery
 
 from .const import (
     CONF_BATTERY_CAPACITY_WH,
+    CONF_CHARGE_EFFICIENCY,
     CONF_CORE_ENTRY_ID,
+    CONF_DISCHARGE_EFFICIENCY,
     CONF_GATEWAY_HOST,
     CONF_GATEWAY_PASSWORD,
     CONF_MAX_CHARGE_W,
     CONF_MAX_DISCHARGE_W,
+    DEFAULT_CHARGE_EFFICIENCY,
+    DEFAULT_DISCHARGE_EFFICIENCY,
     DOMAIN,
 )
 from .powerwall import PowerwallAuthError, PowerwallClient, PowerwallError
@@ -65,6 +69,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         capacity_wh=entry.data[CONF_BATTERY_CAPACITY_WH],
         max_charge_w=entry.data[CONF_MAX_CHARGE_W],
         max_discharge_w=entry.data[CONF_MAX_DISCHARGE_W],
+        charge_efficiency=entry.data.get(
+            CONF_CHARGE_EFFICIENCY, DEFAULT_CHARGE_EFFICIENCY
+        ),
+        discharge_efficiency=entry.data.get(
+            CONF_DISCHARGE_EFFICIENCY, DEFAULT_DISCHARGE_EFFICIENCY
+        ),
         read_only=not control_enabled,
     )
 

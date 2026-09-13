@@ -4,29 +4,35 @@
       "user": {
         "title": "Which LibrePower instance?",
         "description": "Pick the LibrePower core installation this Powerwall belongs to.",
-        "data": { "core_entry_id": "LibrePower instance" }
+        "data": {
+          "core_entry_id": "LibrePower instance"
+        }
       },
       "powerwall": {
         "title": "Connect your Powerwall",
-        "description": "This adapter talks to the Gateway directly over your local network. You only need the Gateway password printed on the Powerwall itself \u2014 no Tesla account required for telemetry.\n\nYour Home Assistant host must be able to reach the Gateway. If 192.168.91.1 doesn't respond, you may need a static route or to join the Gateway's WiFi network.\n\nBattery capacity and charge/discharge limits are entered here because pypowerwall has no way to read them from the device automatically \u2014 use your Powerwall's nameplate rating (13500 Wh per unit is standard).",
+        "description": "This adapter talks to the Gateway directly over your local network. You only need the Gateway password printed on the Powerwall itself — no Tesla account required for telemetry.\n\nYour Home Assistant host must be able to reach the Gateway. If 192.168.91.1 doesn't respond, you may need a static route or to join the Gateway's WiFi network.\n\nBattery capacity and charge/discharge limits are entered here because pypowerwall has no way to read them from the device automatically — use your Powerwall's nameplate rating (13500 Wh per unit is standard).\n\nCharge/discharge efficiency default to 0.90 if left as-is - a reasonable placeholder, not a measured value. Override only if you have a better manufacturer figure for your specific hardware.",
         "data": {
           "gateway_host": "Gateway address",
           "gateway_password": "Gateway password",
           "battery_capacity_wh": "Battery capacity (Wh)",
           "max_charge_w": "Maximum charge power (W)",
-          "max_discharge_w": "Maximum discharge power (W)"
+          "max_discharge_w": "Maximum discharge power (W)",
+          "charge_efficiency": "Charge efficiency (0-1, optional)",
+          "discharge_efficiency": "Discharge efficiency (0-1, optional)"
         }
       },
       "reauth_confirm": {
         "title": "Powerwall password changed",
         "description": "The Gateway is no longer accepting the stored password. Re-enter the password printed on the Powerwall.",
-        "data": { "gateway_password": "Gateway password" }
+        "data": {
+          "gateway_password": "Gateway password"
+        }
       }
     },
     "error": {
-      "invalid_gateway_password": "The Gateway rejected that password. Check the sticker on the Powerwall \u2014 it's the full string, not just the last few characters.",
+      "invalid_gateway_password": "The Gateway rejected that password. Check the sticker on the Powerwall — it's the full string, not just the last few characters.",
       "gateway_unreachable": "Couldn't reach the Gateway at that address. Check that Home Assistant has a network route to it.",
-      "unknown": "Unexpected error \u2014 check the Home Assistant logs."
+      "unknown": "Unexpected error — check the Home Assistant logs."
     },
     "abort": {
       "already_configured": "This Powerwall is already registered with that LibrePower instance.",

@@ -31,3 +31,11 @@ CONF_MAX_DISCHARGE_W = "max_discharge_w"
 DEFAULT_BATTERY_CAPACITY_WH = 13500.0  # One Powerwall
 DEFAULT_MAX_CHARGE_W = 5000.0
 DEFAULT_MAX_DISCHARGE_W = 5000.0
+
+# Pre-measurement defaults - see custom_components.librepower.battery's
+# docstring for why these are provisional, not measured, and reported by
+# this adapter rather than assumed by core.
+CONF_CHARGE_EFFICIENCY = "charge_efficiency"
+CONF_DISCHARGE_EFFICIENCY = "discharge_efficiency"
+DEFAULT_CHARGE_EFFICIENCY = 0.90
+DEFAULT_DISCHARGE_EFFICIENCY = 0.90

@@ -23,13 +23,17 @@ from custom_components.librepower.const import (
 
 from .const import (
     CONF_BATTERY_CAPACITY_WH,
+    CONF_CHARGE_EFFICIENCY,
     CONF_CORE_ENTRY_ID,
+    CONF_DISCHARGE_EFFICIENCY,
     CONF_GATEWAY_HOST,
     CONF_GATEWAY_PASSWORD,
     CONF_MAX_CHARGE_W,
     CONF_MAX_DISCHARGE_W,
     CORE_DOMAIN,
     DEFAULT_BATTERY_CAPACITY_WH,
+    DEFAULT_CHARGE_EFFICIENCY,
+    DEFAULT_DISCHARGE_EFFICIENCY,
     DEFAULT_GATEWAY_HOST,
     DEFAULT_MAX_CHARGE_W,
     DEFAULT_MAX_DISCHARGE_W,
@@ -104,6 +108,8 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 capacity_wh=user_input[CONF_BATTERY_CAPACITY_WH],
                 max_charge_w=user_input[CONF_MAX_CHARGE_W],
                 max_discharge_w=user_input[CONF_MAX_DISCHARGE_W],
+                charge_efficiency=user_input[CONF_CHARGE_EFFICIENCY],
+                discharge_efficiency=user_input[CONF_DISCHARGE_EFFICIENCY],
                 read_only=not control_enabled,
             )
             try:
@@ -141,6 +147,12 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_MAX_DISCHARGE_W, default=DEFAULT_MAX_DISCHARGE_W
                     ): vol.Coerce(float),
+                    vol.Optional(
+                        CONF_CHARGE_EFFICIENCY, default=DEFAULT_CHARGE_EFFICIENCY
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+                    vol.Optional(
+                        CONF_DISCHARGE_EFFICIENCY, default=DEFAULT_DISCHARGE_EFFICIENCY
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
                 }
             ),
             errors=errors,
@@ -172,6 +184,12 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 capacity_wh=entry.data[CONF_BATTERY_CAPACITY_WH],
                 max_charge_w=entry.data[CONF_MAX_CHARGE_W],
                 max_discharge_w=entry.data[CONF_MAX_DISCHARGE_W],
+                charge_efficiency=entry.data.get(
+                    CONF_CHARGE_EFFICIENCY, DEFAULT_CHARGE_EFFICIENCY
+                ),
+                discharge_efficiency=entry.data.get(
+                    CONF_DISCHARGE_EFFICIENCY, DEFAULT_DISCHARGE_EFFICIENCY
+                ),
             )
             try:
                 await client.async_connect()

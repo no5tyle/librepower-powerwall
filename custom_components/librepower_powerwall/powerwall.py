@@ -44,6 +44,7 @@ core's coordinator can catch them without knowing this adapter exists.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 # Cross-repo import: relies on custom_components being a shared namespace
@@ -102,6 +103,8 @@ class PowerwallClient:
         capacity_wh: float,
         max_charge_w: float,
         max_discharge_w: float,
+        charge_efficiency: float = 0.90,
+        discharge_efficiency: float = 0.90,
         read_only: bool = True,
     ) -> None:
         self._hass = hass
@@ -112,9 +115,18 @@ class PowerwallClient:
         # API to read nameplate capacity from the device (checked; there
         # isn't one), so this can't be auto-detected. See battery.py's
         # docstring in core for why this lives here rather than in core.
+        # Efficiency defaults match core's own pre-measurement defaults -
+        # see battery.py for why these are provisional, not measured.
         self._capacity_wh = capacity_wh
         self._max_charge_w = max_charge_w
         self._max_discharge_w = max_discharge_w
+        self._charge_efficiency = charge_efficiency
+        self._discharge_efficiency = discharge_efficiency
+        # Updated by every successful snapshot read; used by async_charge to
+        # force-charge without an extra pypowerwall call per write (the
+        # Gateway "dislikes hammering" - see UPDATE_INTERVAL_TELEMETRY's own
+        # comment in core's const.py for the same concern elsewhere).
+        self._last_known_soc: float | None = None
         # Enforced at the lowest level on purpose. A guard further up could be
         # bypassed by a future service handler calling the client directly;
         # here, no write can escape regardless of who calls it.
@@ -134,6 +146,8 @@ class PowerwallClient:
             capacity_wh=self._capacity_wh,
             max_charge_w=self._max_charge_w,
             max_discharge_w=self._max_discharge_w,
+            charge_efficiency=self._charge_efficiency,
+            discharge_efficiency=self._discharge_efficiency,
         )
 
     # -- lifecycle ------------------------------------------------------------
@@ -197,13 +211,22 @@ class PowerwallClient:
 
         # pypowerwall reports grid as "site" and battery as "battery", with
         # battery negative when charging — same convention we expose.
+        soc = self._normalise_soc(level)
+        self._last_known_soc = soc
         return BatterySnapshot(
-            soc=self._normalise_soc(level),
+            soc=soc,
             solar_w=float(flows.get("solar") or 0.0),
             battery_w=float(flows.get("battery") or 0.0),
             grid_w=float(flows.get("site") or 0.0),
             load_w=float(flows.get("load") or 0.0),
+            timestamp=datetime.now(timezone.utc),
             grid_connected=self._read_grid_status(pw),
+            operational_status=self._read_operational_status(pw),
+            # pypowerwall has no state-of-health API (checked; there isn't
+            # one) - None is the honest answer, not a guess. Revisit if a
+            # future pypowerwall release adds one, or if per-block SOH turns
+            # out to be derivable from vitals() - not confirmed, not used.
+            state_of_health=None,
         )
 
     @staticmethod
@@ -223,67 +246,111 @@ class PowerwallClient:
             return status.upper() in ("UP", "SYSTEM_GRID_CONNECTED")
         return bool(status)
 
-    # -- writes ---------------------------------------------------------------
+    @staticmethod
+    def _read_operational_status(pw: Any) -> str:
+        """"ok" if pypowerwall's own alerts() reports nothing outstanding.
 
-    async def async_set_backup_reserve(self, reserve: float) -> None:
-        """Set the backup reserve (0-1).
+        alerts() aggregates real device-reported alerts (falls back to the
+        /api/solar_powerwall endpoint on firmware where vitals() isn't
+        available) - this is genuine fault reporting, not a placeholder.
+        Never fail a snapshot over this being unavailable; "ok" is the safe
+        default rather than blocking telemetry over a diagnostic extra.
+        """
+        try:
+            alerts = pw.alerts()
+        except Exception:  # noqa: BLE001 - diagnostic only
+            return "ok"
+        if alerts:
+            return "fault"
+        return "ok"
 
-        This is the primary control lever: raising the reserve above current SOC
-        holds the battery, lowering it permits discharge. It is deliberately the
-        only write the optimiser needs for the common case.
+    # -- battery disposition channel -------------------------------------
+
+    async def async_charge(self, target_soc: float) -> None:
+        """Charge toward target_soc, forcing grid charge if needed.
+
+        Realises core's "charge" intent using Powerwall's actual mechanism:
+        setting backup reserve *above current SOC* is what forces the
+        Gateway to draw grid power into the battery rather than merely
+        permitting it. Core doesn't need to know that's how Powerwall does
+        it - it just asked to charge toward a target.
 
         Requires v1r (see module docstring). Against a gateway-password-only
-        connection this raises ``PowerwallV1rRequiredError`` rather than
-        silently no-op'ing.
+        connection this raises ``PowerwallV1rRequiredError``.
         """
-        if not 0.0 <= reserve <= 1.0:
-            raise ValueError(f"reserve must be 0-1, got {reserve}")
+        if not 0.0 <= target_soc <= 1.0:
+            raise ValueError(f"target_soc must be 0-1, got {target_soc}")
+        current = self._last_known_soc
+        reserve = max(target_soc, current) if current is not None else target_soc
         await self._call_write("set_reserve", reserve * 100.0)
 
-    async def async_set_operation_mode(self, mode: str) -> None:
-        """Set the gateway operation mode (e.g. self_consumption, autonomous).
+    async def async_discharge(self, target_soc: float) -> None:
+        """Permit discharge down to target_soc, for load and/or export.
 
         Requires v1r. See module docstring.
         """
-        await self._call_write("set_mode", mode)
+        if not 0.0 <= target_soc <= 1.0:
+            raise ValueError(f"target_soc must be 0-1, got {target_soc}")
+        await self._call_write("set_reserve", target_soc * 100.0)
 
-    async def async_set_grid_export(self, rule: str) -> None:
-        """Set the export rule: 'battery_ok', 'pv_only', or 'never'.
-
-        This is the soft curtailment lever. Setting 'never' blocks all export;
-        with nowhere for surplus solar to go, the Gateway curtails production
-        rather than overproduce. The site stays grid-connected throughout —
-        import still works, this only gates export.
+    async def async_hold(self, soc: float) -> None:
+        """Pin the battery at soc - no charge, no discharge.
 
         Requires v1r. See module docstring.
         """
-        if rule not in ("battery_ok", "pv_only", "never"):
-            raise ValueError(f"Invalid export rule: {rule}")
-        await self._call_write("set_grid_export", rule)
+        if not 0.0 <= soc <= 1.0:
+            raise ValueError(f"soc must be 0-1, got {soc}")
+        await self._call_write("set_reserve", soc * 100.0)
 
-    async def async_go_off_grid(self) -> None:
-        """Force intentional islanding — hard curtailment of last resort.
+    async def async_release(self) -> None:
+        """Stop overriding - return to the Gateway's own automatic behaviour.
 
-        Disconnects from the grid entirely. Solar is throttled to house load
-        plus battery charging because there is nowhere else for it to go, same
-        underlying mechanism as export='never', but with no import path either.
-
-        This is NOT a routine curtailment tool. It exists for the case
-        export='never' cannot reach — e.g. an AC-coupled inverter on a
-        different circuit that keeps exporting regardless of the Gateway's
-        export rule. Any caller of this needs its own safety gating (SOC
-        floor, duration cap) — this method applies none. See PowerSync's
-        curtailment_fallback.py for the shape such gating should take
-        (independently implemented, not copied — that file is PolyForm
-        licensed).
+        Sets operation mode to self_consumption, Powerwall's native
+        automatic mode. Known gap: this does not restore whatever backup
+        reserve was configured before LibrePower started controlling it -
+        that original value is never captured, so reserve is left wherever
+        it currently sits. Worth fixing if this proves to matter in
+        practice; not done here because a wrong guess at "the original
+        value" would be worse than leaving it alone.
 
         Requires v1r. See module docstring.
         """
-        await self._call_write("go_off_grid")
+        await self._call_write("set_mode", "self_consumption")
 
-    async def async_reconnect_grid(self) -> None:
-        """Reverse ``async_go_off_grid``. Requires v1r."""
+    # -- export policy channel, independent of disposition -----------------
+
+    async def async_curtail_export(self, level: str) -> None:
+        """'soft': block export, stay grid-connected. 'strong': islanding.
+
+        Soft sets the Gateway's export rule to 'never' - with nowhere for
+        surplus solar to go, the Gateway curtails production internally
+        rather than overproduce. Strong forces intentional islanding
+        (go_off_grid) - same underlying throttling, but drops the site off
+        grid entirely, no import either. This is a last resort for cases
+        soft curtailment can't reach (e.g. an AC-coupled inverter on a
+        separate circuit that keeps exporting regardless of the Gateway's
+        export rule).
+
+        Strong curtailment has NO safety gating of its own here (no SOC
+        floor, no duration cap) - see optimiser/MODIFICATIONS.md item 7 in
+        core for the gating this needs before being callable from anywhere
+        automated. Requires v1r either way. See module docstring.
+        """
+        if level == "soft":
+            await self._call_write("set_grid_export", "never")
+        elif level == "strong":
+            await self._call_write("go_off_grid")
+        else:
+            raise ValueError(f"Invalid curtailment level: {level}")
+
+    async def async_allow_export(self) -> None:
+        """Reverse curtailment - Tesla's normal default export rule.
+
+        If currently islanded (strong curtailment), this also reconnects to
+        grid; if soft-curtailed, this just re-permits export. Requires v1r.
+        """
         await self._call_write("reconnect_grid")
+        await self._call_write("set_grid_export", "battery_ok")
 
     async def _call_write(self, method_name: str, *args: Any) -> None:
         if self._read_only:
