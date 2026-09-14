@@ -197,6 +197,9 @@ class PowerwallClient:
         # bypassed by a future service handler calling the client directly;
         # here, no write can escape regardless of who calls it.
         self._read_only = read_only
+        # Captured in async_connect(), before this adapter ever writes to
+        # reserve - see async_release()'s use of it.
+        self._original_reserve_percent: float | None = None
 
         # -- strong-curtailment (islanding) safety gate --------------------
         # See PowerwallIslandingBlockedError. State is in-memory only: an HA
@@ -235,6 +238,23 @@ class PowerwallClient:
         self._pw = await self._hass.async_add_executor_job(self._build_client)
         # A snapshot is the real connectivity test; construction alone is lazy.
         await self.async_get_snapshot()
+        if not self._read_only:
+            # Remember whatever reserve is already set, *before* this
+            # adapter ever writes to it, so async_release() can restore it
+            # later instead of leaving reserve wherever LibrePower's last
+            # write happened to put it. Best-effort: a live reload (this
+            # runs on every connect, including ones triggered by core's own
+            # control_enabled/backup_reserve changing - see __init__.py's
+            # live-reload listener) is exactly when "whatever's there now"
+            # is the right thing to capture, and a read failure here isn't
+            # fatal to setup - async_release() just has nothing to restore.
+            try:
+                self._original_reserve_percent = await self._hass.async_add_executor_job(
+                    self._pw.get_reserve
+                )
+            except Exception as err:  # noqa: BLE001 - best-effort, never fatal
+                _LOGGER.debug("Could not read current reserve to remember it: %s", err)
+                self._original_reserve_percent = None
 
     def _build_client(self) -> Any:
         """Blocking. Runs in executor."""
@@ -426,16 +446,19 @@ class PowerwallClient:
         """Stop overriding - return to the Gateway's own automatic behaviour.
 
         Sets operation mode to self_consumption, Powerwall's native
-        automatic mode. Known gap: this does not restore whatever backup
-        reserve was configured before LibrePower started controlling it -
-        that original value is never captured, so reserve is left wherever
-        it currently sits. Worth fixing if this proves to matter in
-        practice; not done here because a wrong guess at "the original
-        value" would be worse than leaving it alone.
+        automatic mode, then restores whatever backup reserve was in place
+        before this adapter's first write this connection (captured in
+        async_connect() - see its own comment). If nothing was captured
+        (the read failed, or this is a read-only/shadow-mode connection
+        that never wrote in the first place), reserve is left wherever it
+        currently sits rather than guessing - a wrong guess would be worse
+        than doing nothing.
 
         Requires v1r. See module docstring.
         """
         await self._call_write("set_mode", "self_consumption")
+        if self._original_reserve_percent is not None:
+            await self._call_write("set_reserve", self._original_reserve_percent)
 
     # -- export policy channel, independent of disposition -----------------
 
