@@ -69,7 +69,7 @@ core's coordinator can catch them without knowing this adapter exists.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 # Cross-repo import: relies on custom_components being a shared namespace
@@ -87,6 +87,12 @@ from custom_components.librepower.battery import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Strong-curtailment (islanding) safety gate defaults - see
+# PowerwallIslandingBlockedError. Not yet exposed in config_flow.py/options;
+# override via PowerwallClient's constructor params in the meantime.
+DEFAULT_MIN_SOC_FOR_ISLANDING = 0.30
+DEFAULT_MAX_ISLANDING_HOURS_PER_DAY = 4.0
 
 
 class PowerwallError(BatteryError):
@@ -117,6 +123,27 @@ class PowerwallV1rRequiredError(PowerwallError, BatteryControlUnavailableError):
     """
 
 
+class PowerwallIslandingBlockedError(PowerwallError, BatteryControlUnavailableError):
+    """Strong curtailment (intentional islanding) was refused by this
+    adapter's own safety gate - not something Tesla/pypowerwall rejected.
+
+    Two independent guards in ``async_curtail_export``, either one enough to
+    block:
+      - SOC floor: refused if current SOC is below ``min_soc_for_islanding``,
+        *or unknown* - fails closed rather than assuming it's safe.
+      - Daily duration cap: refused once today's cumulative intentional-
+        islanding time reaches ``max_islanding_hours_per_day``.
+
+    Neither guard exists in pypowerwall or the Gateway itself - Tesla's
+    ``go_off_grid()`` will happily disconnect at 1% SOC and stay islanded
+    indefinitely if asked; while islanded, the home runs on solar + battery
+    alone, so a depleted battery means the home loses power until
+    ``reconnect_grid()`` succeeds. This is why core's
+    ``optimiser/MODIFICATIONS.md`` item 7 flagged strong curtailment as
+    unsafe to call from anywhere automated until gated.
+    """
+
+
 class PowerwallClient:
     """Adapter over pypowerwall for local telemetry and control."""
 
@@ -133,6 +160,8 @@ class PowerwallClient:
         read_only: bool = True,
         rsa_key_path: str | None = None,
         din: str | None = None,
+        min_soc_for_islanding: float = DEFAULT_MIN_SOC_FOR_ISLANDING,
+        max_islanding_hours_per_day: float = DEFAULT_MAX_ISLANDING_HOURS_PER_DAY,
     ) -> None:
         self._hass = hass
         self._host = host
@@ -168,6 +197,18 @@ class PowerwallClient:
         # bypassed by a future service handler calling the client directly;
         # here, no write can escape regardless of who calls it.
         self._read_only = read_only
+
+        # -- strong-curtailment (islanding) safety gate --------------------
+        # See PowerwallIslandingBlockedError. State is in-memory only: an HA
+        # restart mid-islanding loses track of how long we've already been
+        # disconnected today, resetting the daily counter early - a known
+        # gap (persisting it would need HA's storage helpers, not done here)
+        # rather than a reason not to have the gate at all.
+        self._min_soc_for_islanding = min_soc_for_islanding
+        self._max_islanding_hours_per_day = max_islanding_hours_per_day
+        self._islanding_started_at: datetime | None = None
+        self._islanding_seconds_today: float = 0.0
+        self._islanding_day: date | None = None
 
     @property
     def read_only(self) -> bool:
@@ -410,15 +451,16 @@ class PowerwallClient:
         separate circuit that keeps exporting regardless of the Gateway's
         export rule).
 
-        Strong curtailment has NO safety gating of its own here (no SOC
-        floor, no duration cap) - see optimiser/MODIFICATIONS.md item 7 in
-        core for the gating this needs before being callable from anywhere
-        automated. Requires v1r either way. See module docstring.
+        Strong curtailment is gated by an SOC floor and a daily duration cap
+        (see PowerwallIslandingBlockedError) - Tesla's go_off_grid() itself
+        has neither. Requires v1r either way. See module docstring.
         """
         if level == "soft":
             await self._call_write("set_grid_export", "never")
         elif level == "strong":
+            self._check_islanding_allowed()
             await self._call_write("go_off_grid")
+            self._islanding_started_at = datetime.now(timezone.utc)
         else:
             raise ValueError(f"Invalid curtailment level: {level}")
 
@@ -430,6 +472,84 @@ class PowerwallClient:
         """
         await self._call_write("reconnect_grid")
         await self._call_write("set_grid_export", "battery_ok")
+        self._record_islanding_ended()
+
+    # -- strong-curtailment (islanding) safety gate ------------------------
+
+    def _check_islanding_allowed(self) -> None:
+        """Refuse to island if the SOC is too low (or unknown) or today's
+        duration cap is already used up. See PowerwallIslandingBlockedError.
+        """
+        if self._last_known_soc is None:
+            raise PowerwallIslandingBlockedError(
+                "Refusing to island: current SOC is unknown (no snapshot "
+                "read yet). Failing closed rather than assuming it's safe."
+            )
+        if self._last_known_soc < self._min_soc_for_islanding:
+            raise PowerwallIslandingBlockedError(
+                f"Refusing to island: SOC {self._last_known_soc:.0%} is below "
+                f"the minimum {self._min_soc_for_islanding:.0%} required to "
+                "intentionally disconnect from the grid."
+            )
+        used_hours = self._islanding_hours_used_today()
+        if used_hours >= self._max_islanding_hours_per_day:
+            raise PowerwallIslandingBlockedError(
+                f"Refusing to island: today's cap of "
+                f"{self._max_islanding_hours_per_day:.1f}h of intentional "
+                f"islanding is already used ({used_hours:.1f}h). Reconnect "
+                "and wait for tomorrow, or raise the cap if this is "
+                "intentional."
+            )
+
+    def _islanding_hours_used_today(self) -> float:
+        """Cumulative intentional-islanding time today, including any
+        session currently in progress (computed live, not just what's been
+        recorded so far by _record_islanding_ended).
+        """
+        self._roll_islanding_day_if_needed()
+        seconds = self._islanding_seconds_today
+        if self._islanding_started_at is not None:
+            seconds += (
+                datetime.now(timezone.utc) - self._islanding_started_at
+            ).total_seconds()
+        return seconds / 3600.0
+
+    def _record_islanding_ended(self) -> None:
+        """Fold an in-progress islanding session's elapsed time into today's
+        total. Safe to call even if we weren't islanded (a no-op then) -
+        async_allow_export calls this unconditionally rather than tracking
+        whether the previous curtailment was 'soft' or 'strong' itself.
+
+        Order matters: elapsed time is computed and _islanding_started_at
+        cleared *before* the day-roll check, since that check deliberately
+        no-ops while a session looks active (see _roll_islanding_day_if_needed)
+        - clearing first is what lets a session that happened to span
+        midnight actually roll over once it ends, landing its whole
+        duration against the day it ended on.
+        """
+        if self._islanding_started_at is None:
+            return
+        elapsed = (datetime.now(timezone.utc) - self._islanding_started_at).total_seconds()
+        self._islanding_started_at = None
+        self._roll_islanding_day_if_needed()
+        self._islanding_seconds_today += max(elapsed, 0.0)
+
+    def _roll_islanding_day_if_needed(self) -> None:
+        """Reset the daily counter on a UTC calendar-day boundary - but never
+        while a session is actively in progress (_islanding_started_at set),
+        so a session spanning midnight can't have the counter reset out from
+        under it mid-flight (which would let a fresh 24h-cap habitually
+        restart the exact moment the old one was hit). The whole session's
+        duration instead lands against the day it ended on, once
+        _record_islanding_ended runs - a deliberate simplification, not
+        exact per-calendar-day accounting.
+        """
+        if self._islanding_started_at is not None:
+            return
+        today = datetime.now(timezone.utc).date()
+        if self._islanding_day != today:
+            self._islanding_day = today
+            self._islanding_seconds_today = 0.0
 
     async def _call_write(self, method_name: str, *args: Any) -> None:
         if self._read_only:

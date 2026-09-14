@@ -36,7 +36,12 @@ from .const import (
     DEFAULT_DISCHARGE_EFFICIENCY,
     DOMAIN,
 )
-from .powerwall import PowerwallAuthError, PowerwallClient, PowerwallError
+from .powerwall import (
+    DEFAULT_MIN_SOC_FOR_ISLANDING,
+    PowerwallAuthError,
+    PowerwallClient,
+    PowerwallError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,7 +58,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     a live handover).
     """
     from custom_components.librepower.const import (
+        CONF_BACKUP_RESERVE,
         CONF_CONTROL_ENABLED,
+        DEFAULT_BACKUP_RESERVE,
         DEFAULT_CONTROL_ENABLED,
     )
 
@@ -64,6 +71,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if core_entry
         else DEFAULT_CONTROL_ENABLED
     )
+    # The islanding safety gate's SOC floor (powerwall.py's
+    # PowerwallIslandingBlockedError) is never lower than core's own
+    # backup_reserve - if the user has already said "never go below X%"
+    # for normal operation, intentional grid disconnection (which removes
+    # the grid as a backstop entirely) shouldn't be willing to go any
+    # lower, only possibly higher than the gate's own sane default.
+    backup_reserve = (
+        core_entry.options.get(CONF_BACKUP_RESERVE, DEFAULT_BACKUP_RESERVE)
+        if core_entry
+        else DEFAULT_BACKUP_RESERVE
+    )
+    min_soc_for_islanding = max(DEFAULT_MIN_SOC_FOR_ISLANDING, backup_reserve)
 
     rsa_key_path = await _async_ensure_rsa_key_file(hass, entry)
 
@@ -87,6 +106,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         read_only=not control_enabled,
         rsa_key_path=rsa_key_path,
         din=entry.data.get(CONF_GATEWAY_DIN),
+        min_soc_for_islanding=min_soc_for_islanding,
     )
 
     try:
