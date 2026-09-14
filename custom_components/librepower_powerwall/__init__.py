@@ -32,12 +32,15 @@ from .const import (
     CONF_GATEWAY_PASSWORD,
     CONF_MAX_CHARGE_W,
     CONF_MAX_DISCHARGE_W,
+    CONF_MAX_ISLANDING_HOURS_PER_DAY,
+    CONF_MIN_SOC_FOR_ISLANDING,
     CONF_RSA_PRIVATE_KEY_PEM,
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
     DOMAIN,
 )
 from .powerwall import (
+    DEFAULT_MAX_ISLANDING_HOURS_PER_DAY,
     DEFAULT_MIN_SOC_FOR_ISLANDING,
     PowerwallAuthError,
     PowerwallClient,
@@ -79,12 +82,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # for normal operation, intentional grid disconnection (which removes
     # the grid as a backstop entirely) shouldn't be willing to go any
     # lower, only possibly higher than the gate's own sane default.
+    #
+    # min_soc_for_islanding itself is user-configurable via this entry's
+    # own options flow (config_flow.py's LibrePowerPowerwallOptionsFlow) -
+    # that configured value (or DEFAULT_MIN_SOC_FOR_ISLANDING if never set)
+    # is still max()'d against backup_reserve below, so a user can raise
+    # the floor but never accidentally lower it beneath core's own reserve
+    # setting.
     backup_reserve = (
         core_entry.options.get(CONF_BACKUP_RESERVE, DEFAULT_BACKUP_RESERVE)
         if core_entry
         else DEFAULT_BACKUP_RESERVE
     )
-    min_soc_for_islanding = max(DEFAULT_MIN_SOC_FOR_ISLANDING, backup_reserve)
+    configured_min_soc_for_islanding = entry.options.get(
+        CONF_MIN_SOC_FOR_ISLANDING, DEFAULT_MIN_SOC_FOR_ISLANDING
+    )
+    min_soc_for_islanding = max(configured_min_soc_for_islanding, backup_reserve)
+    max_islanding_hours_per_day = entry.options.get(
+        CONF_MAX_ISLANDING_HOURS_PER_DAY, DEFAULT_MAX_ISLANDING_HOURS_PER_DAY
+    )
 
     rsa_key_path = await _async_ensure_rsa_key_file(hass, entry)
 
@@ -109,6 +125,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         rsa_key_path=rsa_key_path,
         din=entry.data.get(CONF_GATEWAY_DIN),
         min_soc_for_islanding=min_soc_for_islanding,
+        max_islanding_hours_per_day=max_islanding_hours_per_day,
     )
 
     try:

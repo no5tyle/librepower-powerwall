@@ -89,8 +89,11 @@ from custom_components.librepower.battery import (
 _LOGGER = logging.getLogger(__name__)
 
 # Strong-curtailment (islanding) safety gate defaults - see
-# PowerwallIslandingBlockedError. Not yet exposed in config_flow.py/options;
-# override via PowerwallClient's constructor params in the meantime.
+# PowerwallIslandingBlockedError. User-configurable via this integration's
+# options flow (config_flow.py's LibrePowerPowerwallOptionsFlow); these are
+# the fallback when nothing's been configured there yet, and what a direct
+# PowerwallClient construction (e.g. a test) gets if it doesn't override
+# these constructor params itself.
 DEFAULT_MIN_SOC_FOR_ISLANDING = 0.30
 DEFAULT_MAX_ISLANDING_HOURS_PER_DAY = 4.0
 
