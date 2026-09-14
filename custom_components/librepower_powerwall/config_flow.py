@@ -37,7 +37,13 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 
 from custom_components.librepower.const import (
     CONF_CONTROL_ENABLED,
@@ -53,6 +59,8 @@ from .const import (
     CONF_GATEWAY_PASSWORD,
     CONF_MAX_CHARGE_W,
     CONF_MAX_DISCHARGE_W,
+    CONF_MAX_ISLANDING_HOURS_PER_DAY,
+    CONF_MIN_SOC_FOR_ISLANDING,
     CORE_DOMAIN,
     DEFAULT_BATTERY_CAPACITY_WH,
     DEFAULT_CHARGE_EFFICIENCY,
@@ -63,6 +71,8 @@ from .const import (
     DOMAIN,
 )
 from .powerwall import (
+    DEFAULT_MAX_ISLANDING_HOURS_PER_DAY,
+    DEFAULT_MIN_SOC_FOR_ISLANDING,
     PowerwallAuthError,
     PowerwallClient,
     PowerwallError,
@@ -80,6 +90,11 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
         self._reauth_entry: ConfigEntry | None = None
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> "LibrePowerPowerwallOptionsFlow":
+        return LibrePowerPowerwallOptionsFlow()
 
     # -- step 1: which core instance ------------------------------------------
 
@@ -232,4 +247,46 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema({vol.Required(CONF_GATEWAY_PASSWORD): str}),
             errors=errors,
+        )
+
+
+class LibrePowerPowerwallOptionsFlow(OptionsFlow):
+    """Post-setup tuning for the islanding safety gate.
+
+    Everything else about this adapter (Gateway host/password, battery
+    specs, efficiency) is set once at initial setup and rarely revisited -
+    only the islanding gate's own safety knobs (min_soc_for_islanding,
+    max_islanding_hours_per_day - see powerwall.py's
+    PowerwallIslandingBlockedError) get an options screen, since those are
+    the one part of this adapter callers might reasonably want to retune
+    without reconfiguring the whole connection. A single step is enough;
+    there's no branching like core's control-handover flow needs.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        current = self.config_entry.options
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_MIN_SOC_FOR_ISLANDING,
+                        default=current.get(
+                            CONF_MIN_SOC_FOR_ISLANDING, DEFAULT_MIN_SOC_FOR_ISLANDING
+                        ),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+                    vol.Required(
+                        CONF_MAX_ISLANDING_HOURS_PER_DAY,
+                        default=current.get(
+                            CONF_MAX_ISLANDING_HOURS_PER_DAY,
+                            DEFAULT_MAX_ISLANDING_HOURS_PER_DAY,
+                        ),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=24.0)),
+                }
+            ),
         )

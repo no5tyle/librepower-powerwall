@@ -47,3 +47,12 @@ CONF_CHARGE_EFFICIENCY = "charge_efficiency"
 CONF_DISCHARGE_EFFICIENCY = "discharge_efficiency"
 DEFAULT_CHARGE_EFFICIENCY = 0.90
 DEFAULT_DISCHARGE_EFFICIENCY = 0.90
+
+# Islanding safety gate (see powerwall.py's PowerwallIslandingBlockedError) -
+# options-flow only, not initial setup, since these are safety tuning knobs
+# most installs never need to touch. Defaults (DEFAULT_MIN_SOC_FOR_ISLANDING,
+# DEFAULT_MAX_ISLANDING_HOURS_PER_DAY) live in powerwall.py itself rather
+# than being duplicated here, since that module already exported them before
+# this options step existed and other code imports them from there.
+CONF_MIN_SOC_FOR_ISLANDING = "min_soc_for_islanding"
+CONF_MAX_ISLANDING_HOURS_PER_DAY = "max_islanding_hours_per_day"

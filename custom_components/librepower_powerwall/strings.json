@@ -39,5 +39,17 @@
       "reauth_successful": "Reconnected to the Powerwall.",
       "core_not_configured": "No LibrePower instance found. Install and set up the LibrePower core integration first, then add this one."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Islanding safety gate",
+        "description": "Tuning for intentional grid disconnection (\"strong\" export curtailment) - not normal operation. LibrePower will refuse to island below the minimum SOC, or once today's time-islanded budget is used up, whichever comes first.\n\nThe minimum SOC is never allowed below your LibrePower core instance's own backup reserve setting, even if you enter a lower number here - islanding removes the grid as a backstop entirely, so it shouldn't be willing to go any lower than normal operation already requires.",
+        "data": {
+          "min_soc_for_islanding": "Minimum SOC to allow islanding (0-1)",
+          "max_islanding_hours_per_day": "Maximum islanded hours per day"
+        }
+      }
+    }
   }
 }
