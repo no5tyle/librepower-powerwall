@@ -80,11 +80,6 @@ lifecycle, options-reload timing, or storage behave as expected end to end.
 
 ## Known gaps
 
-- **No unregister path.** If this integration is removed while core keeps
-  running, core has no way to know the battery is gone — its coordinator
-  just keeps a stale `BatteryClient` reference that will start failing calls.
-  Worth fixing before relying on this in a setup where the adapter might be
-  uninstalled independently of core.
 - **Control setting isn't live-reloaded.** `read_only` is decided once, from
   core's `control_enabled` option, at this integration's own setup time. If
   you change core's control setting afterwards, this integration needs a

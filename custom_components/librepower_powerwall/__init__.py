@@ -136,11 +136,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Tear down. Does not unregister from core - see async_register_battery's
-    docstring in core for the known gap this leaves.
+    """Tear down, including detaching from core first so its coordinator
+    doesn't keep a stale BatteryClient reference once this integration is
+    gone - see core's async_register_battery/async_unregister_battery
+    docstrings for the detail.
     """
     client = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if client is not None:
+        from custom_components.librepower import async_unregister_battery
+
+        await async_unregister_battery(
+            hass, entry.data[CONF_CORE_ENTRY_ID], client
+        )
         await client.async_close()
     return True
 
