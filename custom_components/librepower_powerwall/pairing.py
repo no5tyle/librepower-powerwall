@@ -4,6 +4,24 @@
 
 """Tesla RSA key pairing for Powerwall local control (v1r).
 
+STATUS: not currently reachable from config_flow.py. The Owner API login
+this module used (``CLIENT_ID = "ownerapi"``, ``build_authorize_url``,
+``async_exchange_code`` against ``auth.tesla.com``, and the subsequent
+``owner-api.teslamotors.com`` calls) broke when Tesla decommissioned that
+domain for third-party callers in June 2026 - every call now returns HTTP
+403 ``{"error":"forbidden, see https://developer.tesla.com/docs/fleet-api"}``,
+confirmed against multiple independent reports (not an HTTP/2 or TLS
+fingerprint issue - this module already used httpx/HTTP2, which was a
+separate, unrelated fix pypowerwall itself needed for the same domain).
+Reviving pairing needs the Fleet API instead: a registered developer app
+(business account, Tesla approval, a real redirect URI), not just a Tesla
+login - real added friction, so this was pulled from the UI rather than
+shipped broken. Everything below the login step (``async_register_key``,
+``async_poll_key_state``, ``generate_rsa_keypair``, the response parsing)
+is still correct and reusable once a working access_token source exists -
+only ``build_authorize_url``/``async_exchange_code``/``OWNER_API_BASE`` calls
+need replacing with a genuine Fleet API OAuth flow.
+
 Registers a public key with Tesla so the Gateway will accept RSA-signed
 "v1r" commands from us over the local network - this is what unlocks
 ``async_charge``/``async_discharge``/curtailment/islanding in powerwall.py;

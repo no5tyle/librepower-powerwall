@@ -4,6 +4,15 @@
 
 """Local Powerwall access - two connection paths, chosen automatically.
 
+STATUS: only gateway-password mode is currently reachable from
+config_flow.py. Pure v1r mode (below) still works correctly given an entry
+with ``rsa_key_path``/``din`` already set, but nothing in this repo's UI can
+populate those anymore - the only pairing mechanism that ever produced them
+(pairing.py's Owner API login) broke when Tesla decommissioned that API in
+June 2026. See pairing.py's own docstring for the detail and what reviving
+it would need (Fleet API credentials). This branching is left in place
+rather than ripped out since it isn't wrong, just currently unreachable.
+
 Design note — two genuinely different ways to talk to the Gateway
 --------------------------------------------------------------------------
 **Gateway-password mode** (``rsa_key_path``/``din`` absent): wraps

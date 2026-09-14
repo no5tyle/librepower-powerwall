@@ -27,101 +27,17 @@
         "data": {
           "gateway_password": "Gateway password"
         }
-      },
-      "connection_method": {
-        "title": "How should this connect to your Powerwall?",
-        "description": "Most setups use the gateway password printed on the Powerwall. If you'd rather not open the unit to read it, you can pair with your Tesla account instead - no password needed, ever, for reads or writes. Pairing needs a PW3 on wired LAN, a Tesla account, and a one-time physical breaker toggle to confirm.",
-        "data": {
-          "connection_method": "Connection method"
-        }
-      },
-      "powerwall_v1r": {
-        "title": "Connect your Powerwall",
-        "description": "Pairing is done - this just needs the Gateway's address on your regular network (its wired LAN IP, not the 192.168.91.1 WiFi AP address - pure v1r connects directly, no AP join needed) and your Powerwall's hardware specs.\n\nBattery capacity and charge/discharge limits are entered here because pypowerwall has no way to read them from the device automatically — use your Powerwall's nameplate rating (13500 Wh per unit is standard).\n\nCharge/discharge efficiency default to 0.90 if left as-is - a reasonable placeholder, not a measured value. Override only if you have a better manufacturer figure for your specific hardware.",
-        "data": {
-          "gateway_host": "Gateway address (LAN IP)",
-          "battery_capacity_wh": "Battery capacity (Wh)",
-          "max_charge_w": "Maximum charge power (W)",
-          "max_discharge_w": "Maximum discharge power (W)",
-          "charge_efficiency": "Charge efficiency (0-1, optional)",
-          "discharge_efficiency": "Discharge efficiency (0-1, optional)"
-        }
-      },
-      "pair_login": {
-        "title": "Log in to Tesla",
-        "description": "Open this URL in your own browser and log in with your Tesla account:\n\n{authorize_url}\n\nAfter logging in, Tesla will try to redirect to a page that doesn't exist (an error or \"open in app?\" prompt is expected) - copy the *full* URL from your browser's address bar at that point and paste it below.",
-        "data": {
-          "redirect_url": "Redirect URL"
-        }
-      },
-      "pair_site": {
-        "title": "Which Powerwall?",
-        "description": "Multiple energy sites were found on this Tesla account - pick the one this adapter connects to.",
-        "data": {
-          "site_id": "Energy site"
-        }
-      },
-      "pair_toggle": {
-        "title": "Confirm on the Gateway",
-        "description": "Tesla didn't auto-verify the key from the cloud step alone. Toggle ONE Powerwall breaker (the DC isolator) OFF, wait a couple of seconds, then back ON - this is Tesla's own physical-presence check, not something this integration can do for you. Then submit this form to check again; it's fine to submit more than once if it's still pending."
-      },
-      "pair_success": {
-        "title": "Pairing complete",
-        "description": "Key verified and registered against {site_name} (DIN {din}).\n\nPublic key fingerprint (SHA-256): {fingerprint}\n\nOne more step: connecting to the Powerwall itself, over its regular network address - no password needed from here on."
       }
     },
     "error": {
       "invalid_gateway_password": "The Gateway rejected that password. Check the sticker on the Powerwall — it's the full string, not just the last few characters.",
       "gateway_unreachable": "Couldn't reach the Gateway at that address. Check that Home Assistant has a network route to it.",
-      "unknown": "Unexpected error — check the Home Assistant logs.",
-      "pairing_auth_error": "Tesla rejected that login - the pasted URL may be from an old attempt, or the code may have expired. Try opening the login URL again.",
-      "pairing_no_site": "No Powerwall/energy site was found on that Tesla account - make sure you logged in with the account the Powerwall is actually set up under.",
-      "pairing_still_pending": "Still not verified. Make sure you toggled the breaker off and back on, then submit again - it can take a few seconds to register.",
-      "pairing_error": "Something went wrong talking to Tesla - check the Home Assistant logs for detail."
+      "unknown": "Unexpected error — check the Home Assistant logs."
     },
     "abort": {
       "already_configured": "This Powerwall is already registered with that LibrePower instance.",
       "reauth_successful": "Reconnected to the Powerwall.",
       "core_not_configured": "No LibrePower instance found. Install and set up the LibrePower core integration first, then add this one."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Pair for battery control",
-        "description": "{status}\n\nThe gateway password you already entered is enough for read-only telemetry. Writing to the battery (charge, discharge, curtailment, islanding) needs an RSA key registered with Tesla and physically confirmed on the Gateway - this does not replace the gateway password, it adds to it. This uses your own Tesla account login directly (the same one the Tesla app uses) - no developer account, no third-party service.",
-        "data": {
-          "start_pairing": "Pair now"
-        }
-      },
-      "pair_login": {
-        "title": "Log in to Tesla",
-        "description": "Open this URL in your own browser and log in with your Tesla account:\n\n{authorize_url}\n\nAfter logging in, Tesla will try to redirect to a page that doesn't exist (an error or \"open in app?\" prompt is expected) - copy the *full* URL from your browser's address bar at that point and paste it below.",
-        "data": {
-          "redirect_url": "Redirect URL"
-        }
-      },
-      "pair_site": {
-        "title": "Which Powerwall?",
-        "description": "Multiple energy sites were found on this Tesla account - pick the one this adapter connects to.",
-        "data": {
-          "site_id": "Energy site"
-        }
-      },
-      "pair_toggle": {
-        "title": "Confirm on the Gateway",
-        "description": "Tesla didn't auto-verify the key from the cloud step alone. Toggle ONE Powerwall breaker (the DC isolator) OFF, wait a couple of seconds, then back ON - this is Tesla's own physical-presence check, not something this integration can do for you. Then submit this form to check again; it's fine to submit more than once if it's still pending."
-      },
-      "pair_success": {
-        "title": "Pairing complete",
-        "description": "Key verified and registered against {site_name} (DIN {din}).\n\nPublic key fingerprint (SHA-256): {fingerprint}\n\nControl writes will work once this entry reloads (automatic - no restart needed)."
-      }
-    },
-    "error": {
-      "pairing_auth_error": "Tesla rejected that login - the pasted URL may be from an old attempt, or the code may have expired. Try opening the login URL again.",
-      "pairing_no_site": "No Powerwall/energy site was found on that Tesla account - make sure you logged in with the account the Powerwall is actually set up under.",
-      "pairing_still_pending": "Still not verified. Make sure you toggled the breaker off and back on, then submit again - it can take a few seconds to register.",
-      "pairing_error": "Something went wrong talking to Tesla - check the Home Assistant logs for detail."
     }
   }
 }
