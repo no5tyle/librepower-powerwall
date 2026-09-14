@@ -21,17 +21,25 @@ surface to core.
 3. Download, restart Home Assistant
 4. Settings → Devices & Services → **Add Integration** → LibrePower - Powerwall
 5. Pick which LibrePower core instance this Powerwall belongs to (skipped automatically if you only have one)
-6. Enter the Gateway address and password, plus your Powerwall's capacity and charge/discharge limits
+6. Choose how to connect:
+   - **Gateway password** (most setups): enter the address and the password printed on the Powerwall, plus your Powerwall's capacity and charge/discharge limits. Control writes (charge, discharge, curtailment, islanding) additionally need pairing - see Settings → Devices & Services → this integration → **Configure** after setup.
+   - **Pair with your Tesla account** (PW3 on wired LAN only): no password, ever - log in with your Tesla account, toggle a breaker once to confirm, then enter the Gateway's regular LAN address and your Powerwall's hardware specs. Reads *and* writes work immediately, with nothing to configure afterward.
 
 ## How it works
 
 Wraps [pypowerwall](https://github.com/jasonacox/pypowerwall) (MIT) for local
-**gateway-password TEDAPI** access — no Tesla account needed for telemetry.
-Control (backup reserve, export rule, islanding) needs pypowerwall's **v1r**
-transport, which requires a one-time RSA key registered through Tesla's Fleet
-API — a real, separate step, not yet built into this repo's config flow. See
-`powerwall.py`'s module docstring for the full detail on what does and
-doesn't need the cloud.
+**gateway-password TEDAPI** access — no Tesla account needed for telemetry,
+but control (backup reserve, export rule, islanding) still needs a one-time
+RSA key registered through Tesla (`pairing.py`, reachable from this
+integration's options after setup).
+
+There's also a second, password-free path: once paired, `powerwall_v1r.py`
+talks to the Gateway using only the RSA-signed **v1r** transport - no
+password anywhere, for reads or writes. `config_flow.py`'s "pair with my
+Tesla account" choice does the pairing *before* ever touching the local
+network, so a PW3-on-wired-LAN setup never needs the sticker password at
+all. See `powerwall.py`'s module docstring for the full detail on which path
+needs what.
 
 Battery capacity and max charge/discharge power are entered during setup,
 not auto-detected — pypowerwall has no API to read nameplate capacity from
@@ -82,9 +90,17 @@ lifecycle, options-reload timing, or storage behave as expected end to end.
   core's `control_enabled` option, at this integration's own setup time. If
   you change core's control setting afterwards, this integration needs a
   manual reload to pick it up — not yet automated.
-- **v1r pairing flow isn't built.** Control requires it (see above); nothing
-  in this repo's config flow walks you through Tesla's RSA key registration
-  yet.
+- **No reauth path for a v1r-only (password-free) entry.** If Tesla ever
+  revokes a paired key, that currently just surfaces as write failures
+  (`powerwall.py`'s `_call_write`), not a guided reauth flow the way an
+  expired gateway password is. Re-pairing via options isn't wired to detect
+  this automatically yet.
+- **`powerwall_v1r.py`'s DeviceControllerQuery field parsing (SOC, power
+  flows, grid status, alerts) is cross-referenced against pypowerwall's own
+  and PowerSync's independent implementations, not validated against live
+  hardware by this repo.** Worth a careful first-run check against a real
+  PW3 before relying on it - see the module's own docstring for the exact
+  field paths in use, if something looks off.
 
 ## Licensing
 

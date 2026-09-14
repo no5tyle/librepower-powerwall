@@ -2,37 +2,53 @@
 # Copyright (C) 2026 LibrePower contributors
 # Full license: /LICENSE. Third-party exception (this file is NOT it): /NOTICE.
 
-"""Local Powerwall access via pypowerwall's TEDAPI transport.
+"""Local Powerwall access - two connection paths, chosen automatically.
 
-Design note — read this before assuming "no cloud" applies to everything
+Design note — two genuinely different ways to talk to the Gateway
 --------------------------------------------------------------------------
-**Telemetry is genuinely cloud-free.** Gateway-password TEDAPI mode needs only
-the password printed on the Powerwall. No Tesla account, no Fleet API
-registration, no cloud pairing.
+**Gateway-password mode** (``rsa_key_path``/``din`` absent): wraps
+pypowerwall's ``Powerwall`` class. Reads work with just the password printed
+on the Powerwall - no Tesla account, no cloud, ever. Writes (backup reserve,
+operation mode, grid export rule, islanding) additionally need pypowerwall's
+"v1r" transport, which needs an RSA key registered through Tesla (a one-time
+cloud handshake, physically confirmed by toggling the DC isolator - see
+pairing.py). Registering that key does *not* remove the need for the gateway
+password here - pypowerwall's own wrapper uses ``gw_pwd`` for both TEDAPI
+reads and (internally, to fetch the Gateway's DIN) v1r writes.
 
-**Control is not.** Every write — backup reserve, operation mode, grid export
-rule, islanding — requires pypowerwall's "v1r" transport, which needs an
-RSA key registered through Tesla's Fleet API (a one-time cloud handshake,
-physically confirmed by toggling the DC isolator). This is not a limitation
-of this integration; it's how Tesla's local protocol is designed. PowerSync
-goes through the identical Fleet API pairing step for the same reason.
+**Pure v1r mode** (``rsa_key_path`` and ``din`` both present - see
+powerwall_v1r.py): once pairing.py has registered a key, *and* we already
+have the DIN from that same cloud step, the gateway password is never used
+for anything, for reads or writes. This is a from-scratch adapter over
+pypowerwall's ``TEDAPIv1r`` transport (the actual RSA-signed wire protocol,
+which pypowerwall's own tests confirm works with no password at all) rather
+than pypowerwall's higher wrapper, specifically to skip the wrapper's
+password-only-for-DIN requirement. PW3 wired LAN only - matches
+``TEDAPIv1r``'s own scope. See powerwall_v1r.py's docstring for the
+"cross-referenced against two independent implementations, not hardware-
+tested by us" caveat on its snapshot parsing.
 
-Practical effect: with gateway-password-only setup, LibrePower can plan and
-display a schedule (v0.1's actual scope) but any control write raises
-``PowerwallV1rRequiredError``. Adding v1r support means adding the RSA
-pairing flow to config_flow.py — real scope, not yet built.
+``PowerwallClient`` picks between the two automatically in ``_build_client``
+based on whether both ``rsa_key_path`` and ``din`` were supplied; callers
+(``__init__.py``, config_flow.py) don't need to know which is active - both
+expose the same read/write method names (see ``_call_write``'s generic
+dispatch), so a config entry can move from one to the other (by pairing) with
+no code change on this end, only a reload.
 
-pypowerwall (MIT, jasonacox) already implements both transports, so we wrap
-it rather than reimplementing TEDAPI or the v1r signing. Everything here is a
-thin adapter: blocking pypowerwall calls are pushed to the executor because
-Home Assistant's event loop must never block.
+pypowerwall (MIT, jasonacox) already implements the TEDAPI/v1r wire protocol,
+so gateway-password mode wraps it rather than reimplementing anything; pure
+v1r mode reuses its ``TEDAPIv1r`` signing class but builds its own queries
+using only pypowerwall's public names (see powerwall_v1r.py). Both paths push
+blocking calls to the executor - Home Assistant's event loop must never
+block.
 
 Reachability
 ------------
-The gateway serves TEDAPI on its own WiFi AP subnet (192.168.91.1). The HA host
-needs a route to it — either joined to the gateway's WiFi, or a static route.
-PW3 on wired LAN is a different transport (bearer auth); see `AUTH_MODE` below
-when adding that.
+Gateway-password mode's default host, 192.168.91.1, is the Gateway's own WiFi
+AP subnet; the HA host needs a route to it — either joined to the gateway's
+WiFi, or a static route. Pure v1r mode connects to whatever host is
+configured directly (typically the Gateway's regular LAN IP) - no AP join
+needed once paired.
 
 This is a battery adapter for LibrePower core
 ------------------------------------------------
@@ -106,10 +122,22 @@ class PowerwallClient:
         charge_efficiency: float = 0.90,
         discharge_efficiency: float = 0.90,
         read_only: bool = True,
+        rsa_key_path: str | None = None,
+        din: str | None = None,
     ) -> None:
         self._hass = hass
         self._host = host
         self._gw_pwd = gateway_password
+        # Path to a v1r private key file registered via pairing.py, and the
+        # Gateway's DIN (also from pairing.py's cloud step). Both present ->
+        # pure password-free v1r transport (powerwall_v1r.py); either absent
+        # -> the pypowerwall-wrapped gateway-password connection below. See
+        # this module's docstring for why pairing alone (rsa_key_path with no
+        # din) isn't a valid state in practice - pairing.py always stores
+        # both together.
+        self._rsa_key_path = rsa_key_path
+        self._din = din
+        self._is_v1r = bool(rsa_key_path and din)
         self._pw: Any | None = None
         # User-entered during this adapter's own setup - pypowerwall has no
         # API to read nameplate capacity from the device (checked; there
@@ -160,6 +188,16 @@ class PowerwallClient:
 
     def _build_client(self) -> Any:
         """Blocking. Runs in executor."""
+        if self._is_v1r:
+            try:
+                from .powerwall_v1r import V1rClient
+
+                return V1rClient(
+                    host=self._host, rsa_key_path=self._rsa_key_path, din=self._din
+                )
+            except Exception as err:
+                raise self._translate(err) from err
+
         try:
             import pypowerwall
         except ImportError as err:  # pragma: no cover - dependency declared
@@ -198,6 +236,9 @@ class PowerwallClient:
 
     def _read_snapshot(self) -> BatterySnapshot:
         """Blocking. Runs in executor."""
+        if self._is_v1r:
+            return self._read_snapshot_v1r()
+
         pw = self._pw
         try:
             # ``power()`` returns the aggregate site/battery/load/solar flows.
@@ -226,6 +267,35 @@ class PowerwallClient:
             # one) - None is the honest answer, not a guess. Revisit if a
             # future pypowerwall release adds one, or if per-block SOH turns
             # out to be derivable from vitals() - not confirmed, not used.
+            state_of_health=None,
+        )
+
+    def _read_snapshot_v1r(self) -> BatterySnapshot:
+        """Blocking. Runs in executor. See powerwall_v1r.py's module docstring
+        for the "cross-referenced, not hardware-tested by us" caveat on the
+        DeviceControllerQuery field parsing this depends on.
+        """
+        from .powerwall_v1r import V1rError
+
+        try:
+            snapshot = self._pw.get_snapshot()
+        except V1rError as err:
+            raise self._translate(err) from err
+
+        # meterAggregates has no direct SOC-unavailable signal distinct from
+        # "the query itself failed" (which raises above) - fall back to the
+        # last known reading rather than reporting a fabricated 0%/100%.
+        soc = snapshot.soc if snapshot.soc is not None else (self._last_known_soc or 0.5)
+        self._last_known_soc = soc
+        return BatterySnapshot(
+            soc=soc,
+            solar_w=snapshot.solar_w,
+            battery_w=snapshot.battery_w,
+            grid_w=snapshot.grid_w,
+            load_w=snapshot.load_w,
+            timestamp=datetime.now(timezone.utc),
+            grid_connected=snapshot.grid_connected,
+            operational_status="fault" if snapshot.alerts else "ok",
             state_of_health=None,
         )
 
@@ -378,11 +448,22 @@ class PowerwallClient:
 
         result = await self._hass.async_add_executor_job(_write)
 
-        # pypowerwall does not raise when the underlying transport rejects a
-        # write — set_reserve/set_mode/set_grid_export/go_off_grid all log an
-        # error and return None if v1r isn't available, which would otherwise
-        # look identical to success. Treat a falsy result as failure.
+        # Neither backend raises when the underlying transport rejects a
+        # write — both log an error and return a falsy result instead, which
+        # would otherwise look identical to success. Treat a falsy result as
+        # failure.
         if not result:
+            if self._is_v1r:
+                # Already on the v1r connection (powerwall_v1r.py) - a falsy
+                # result here means the write itself was rejected, not that
+                # v1r is unavailable. Most common cause: the RSA key is
+                # registered but not yet VERIFIED (toggle a breaker).
+                raise PowerwallError(
+                    f"{method_name}() returned no result over the v1r "
+                    "connection. If the key was just registered, it may still "
+                    "be PENDING_VERIFICATION — toggle a Powerwall breaker "
+                    "OFF then back ON to trigger verification."
+                )
             raise PowerwallV1rRequiredError(
                 f"{method_name}() returned no result. This almost always means "
                 "the connection lacks v1r (RSA-signed) transport — battery "

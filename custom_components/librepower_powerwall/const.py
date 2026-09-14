@@ -25,6 +25,14 @@ CONF_GATEWAY_HOST = "gateway_host"
 CONF_GATEWAY_PASSWORD = "gateway_password"
 DEFAULT_GATEWAY_HOST = "192.168.91.1"
 
+# v1r pairing (see pairing.py) - present once the user has completed the
+# RSA-key registration handshake with Tesla; absent means gateway-password-
+# only (telemetry works, every control write raises PowerwallV1rRequiredError).
+# Only these two are persisted - the Tesla access/refresh tokens used during
+# pairing are deliberately never saved (see pairing.py's module docstring).
+CONF_RSA_PRIVATE_KEY_PEM = "rsa_private_key_pem"
+CONF_GATEWAY_DIN = "gateway_din"
+
 CONF_BATTERY_CAPACITY_WH = "battery_capacity_wh"
 CONF_MAX_CHARGE_W = "max_charge_w"
 CONF_MAX_DISCHARGE_W = "max_discharge_w"
