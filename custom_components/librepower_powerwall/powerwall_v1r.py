@@ -161,6 +161,24 @@ class V1rClient:
         except (json.JSONDecodeError, ValueError) as err:
             raise V1rError(f"DeviceControllerQuery returned non-JSON payload: {err}") from err
 
+    def get_reserve(self) -> float | None:
+        """Current backup reserve, 0-100 Tesla-app scale - same scale
+        set_reserve() takes, and matches pypowerwall's own
+        get_reserve(scale=True) exactly (same reversed formula), so
+        powerwall.py's generic self._pw.get_reserve() dispatch works
+        unchanged regardless of which backend is active. Returns None if
+        config.json couldn't be read (e.g. key not yet VERIFIED) rather
+        than raising - this is a best-effort read used to remember a value
+        before overriding it, not a primary data path.
+        """
+        config = self._transport.get_config_v1r(self._din)
+        if not config:
+            return None
+        raw = (config.get("site_info") or {}).get("backup_reserve_percent")
+        if raw is None:
+            return None
+        return max(0.0, (float(raw) - _RESERVE_APP_TO_RAW_OFFSET) / _RESERVE_APP_TO_RAW_SCALE)
+
     # -- writes -------------------------------------------------------------
 
     def set_reserve(self, app_percent: float) -> bool:
