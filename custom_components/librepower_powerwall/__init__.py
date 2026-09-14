@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -49,13 +50,14 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Connect to the Powerwall and register with core.
 
-    Reads control_enabled from *core's* entry options, not this entry's own -
-    there is deliberately no separate shadow-mode toggle here. See
+    Reads control_enabled (and backup_reserve, for the islanding gate's SOC
+    floor) from *core's* entry options, not this entry's own - there is
+    deliberately no separate shadow-mode toggle here. See
     config_flow.py's async_step_powerwall for where that value is actually
-    read at setup time; it isn't re-read on every restart, so changing core's
-    control setting after this entry exists requires reloading this entry too
-    (not yet automated - a real gap worth fixing before relying on this for
-    a live handover).
+    read at setup time. Live-reloaded: this entry registers an update
+    listener on *core's* entry too (below), not just its own, so changing
+    either option in core's options flow reloads this entry automatically
+    rather than needing a manual reload to pick it up.
     """
     from custom_components.librepower.const import (
         CONF_BACKUP_RESERVE,
@@ -132,6 +134,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # straight into entry.data and relies on this listener to pick it up -
     # without a reload, a newly-paired key wouldn't be used until HA restarts.
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+    # ConfigEntry.add_update_listener works on any entry, not just our own -
+    # registering on *core's* entry is what makes control_enabled/
+    # backup_reserve changes (made in core's options flow, a different
+    # integration) reload this entry automatically instead of going stale
+    # until a manual reload. Cleaned up via our own entry's async_on_unload,
+    # since it's *this* entry's listener slot on core's entry that needs
+    # removing when *this* entry unloads - core's own lifecycle is
+    # unaffected either way.
+    #
+    # Deliberately NOT _async_reload_entry here: HA calls an entry's update
+    # listeners as listener(hass, that_entry) - registered on core_entry, it
+    # would be called with core_entry, and _async_reload_entry would reload
+    # *core*, not us. This closure ignores whatever entry the callback
+    # reports and always reloads our own, via entry.entry_id captured here.
+    if core_entry is not None:
+
+        async def _reload_this_entry(*_args: Any) -> None:
+            await hass.config_entries.async_reload(entry.entry_id)
+
+        entry.async_on_unload(core_entry.add_update_listener(_reload_this_entry))
     return True
 
 

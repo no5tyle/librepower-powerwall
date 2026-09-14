@@ -80,10 +80,6 @@ lifecycle, options-reload timing, or storage behave as expected end to end.
 
 ## Known gaps
 
-- **Control setting isn't live-reloaded.** `read_only` is decided once, from
-  core's `control_enabled` option, at this integration's own setup time. If
-  you change core's control setting afterwards, this integration needs a
-  manual reload to pick it up — not yet automated.
 - **v1r pairing isn't wired into the UI.** `pairing.py` and `powerwall_v1r.py`
   implement RSA key registration and a password-free v1r read/write client,
   but the only login mechanism ever built for them (Tesla's Owner API) was
