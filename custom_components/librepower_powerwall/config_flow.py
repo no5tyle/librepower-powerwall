@@ -105,37 +105,6 @@ _LOGGER = logging.getLogger(__name__)
 # VERIFIED).
 
 
-def _extract_host(networking_status: dict[str, Any] | None) -> str:
-    """Best-effort LAN IPv4 from a get_networking_status() payload.
-
-    Checks ``eth`` then ``wifi``, preferring an interface flagged
-    ``active_route``, then any interface with an address at all. Returns ""
-    (not an error) on anything unexpected - host entry always has a manual
-    fallback field, this is purely a convenience.
-    """
-    if not networking_status:
-        return ""
-    payload = networking_status.get("response", networking_status)
-    if not isinstance(payload, dict):
-        return ""
-
-    def _addr(iface: Any) -> str:
-        if not isinstance(iface, dict):
-            return ""
-        ipv4 = iface.get("ipv4_config")
-        addr = ipv4.get("address") if isinstance(ipv4, dict) else None
-        return addr if isinstance(addr, str) else ""
-
-    interfaces = [payload.get(name) for name in ("eth", "wifi")]
-    for iface in interfaces:
-        if isinstance(iface, dict) and iface.get("active_route") and (addr := _addr(iface)):
-            return addr
-    for iface in interfaces:
-        if addr := _addr(iface):
-            return addr
-    return ""
-
-
 def _remove_if_exists(path: str) -> None:
     """Best-effort cleanup of the temporary pairing-verify key file."""
     if os.path.exists(path):
@@ -424,8 +393,9 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         out" with no indication pairing might still be in progress.
         Checking once per submit keeps every single call fast; the user
         just clicks Submit again if the Gateway hasn't confirmed yet -
-        normal within the ~2-minute post-toggle window (see the module-
-        level comment above _extract_host for that window's source).
+        normal within the ~2-minute post-toggle window (see the
+        module-level comment above _remove_if_exists for that window's
+        source).
         """
         assert self._pair_keypair is not None and self._pair_site is not None
 
@@ -458,21 +428,30 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_pair_verified(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Pairing is VERIFIED - a checkpoint screen before the DIN/host
-        lookups, not folded into pair_confirm's own submit.
+        """Pairing is VERIFIED - a checkpoint screen before the DIN lookup,
+        not folded into pair_confirm's own submit.
 
-        get_system_info (for the DIN) and get_networking_status are each
-        their own live round-trip to the physical Gateway through
-        Teslemetry's gRPC-command proxy - not a cheap cached cloud read,
-        the same kind of call as the VERIFIED check itself. Chaining the
-        poll check plus both of these into the one submit that detects
-        VERIFIED means that single click can trigger three sequential
-        live-gateway round-trips - exactly the kind of stacking that
-        caused pair_confirm's own timeout before the sleep-loop fix, and
-        confirmed live: removing the sleep loop alone wasn't enough,
-        because this inline chaining was still there. Splitting DIN/host
-        lookup onto its own step's submit keeps pair_confirm's own click
-        down to the one call it was designed for.
+        get_system_info (for the DIN) is its own live round-trip to the
+        physical Gateway through Teslemetry's gRPC-command proxy - not a
+        cheap cached cloud read, the same kind of call as the VERIFIED
+        check itself. Chaining the poll check plus this into the one
+        submit that detects VERIFIED means that single click can trigger
+        two sequential live-gateway round-trips - exactly the kind of
+        stacking that caused pair_confirm's own timeout before the
+        sleep-loop fix, and confirmed live: removing the sleep loop alone
+        wasn't enough, because this inline chaining was still there.
+        Splitting the DIN lookup onto its own step's submit keeps
+        pair_confirm's own click down to the one call it was designed for.
+
+        This step used to also call get_networking_status() to auto-fill
+        the host field - dropped entirely (not just moved to yet another
+        step) after a live report of another "unknown error" with no
+        server-side log at all, consistent with the client giving up on a
+        slow request rather than any Python exception. Two live-gateway
+        calls chained in one submit was still one too many; the host
+        field just isn't worth that risk when the user can type their
+        Gateway's LAN IP directly (needed for manual gateway-password
+        setup anyway, so this isn't new information to ask for).
         """
         assert self._pair_keypair is not None
 
@@ -493,13 +472,6 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         if not din:
             return self.async_abort(reason="pair_din_failed")
         self._pair_din = din
-
-        try:
-            networking = await site_api.get_networking_status()
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("Networking status unavailable, host entry will be manual: %s", err)
-            networking = None
-        self._pair_host = _extract_host(networking)
 
         return await self.async_step_pairing_battery_specs()
 

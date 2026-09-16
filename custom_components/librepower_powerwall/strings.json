@@ -42,12 +42,12 @@
       },
       "pair_verified": {
         "title": "Pairing confirmed",
-        "description": "\"{site_name}\" is paired. Submit to look up the Gateway's local network details - this is a separate step from the confirmation check above, so a slow response here doesn't risk timing out the whole flow.",
+        "description": "\"{site_name}\" is paired. Submit to look up the Gateway's identifier - this is a separate step from the confirmation check above, so a slow response here doesn't risk timing out the whole flow. You'll enter the Gateway's local network address yourself on the next screen.",
         "data": {}
       },
       "pairing_battery_specs": {
         "title": "Confirm connection details",
-        "description": "Pairing succeeded - no Gateway password needed from here on. The Gateway's local network address was auto-detected where possible; adjust it if it's wrong for your network.\n\nBattery capacity and charge/discharge limits are entered here because pypowerwall has no way to read them from the device automatically — use your Powerwall's nameplate rating (13500 Wh per unit is standard).\n\nCharge/discharge efficiency default to 0.90 if left as-is - a reasonable placeholder, not a measured value. Override only if you have a better manufacturer figure for your specific hardware.",
+        "description": "Pairing succeeded - no Gateway password needed from here on. Enter the Gateway's address on your local network (the same one you'd use for gateway-password mode).\n\nBattery capacity and charge/discharge limits are entered here because pypowerwall has no way to read them from the device automatically — use your Powerwall's nameplate rating (13500 Wh per unit is standard).\n\nCharge/discharge efficiency default to 0.90 if left as-is - a reasonable placeholder, not a measured value. Override only if you have a better manufacturer figure for your specific hardware.",
         "data": {
           "gateway_host": "Gateway address",
           "battery_capacity_wh": "Battery capacity (Wh)",
