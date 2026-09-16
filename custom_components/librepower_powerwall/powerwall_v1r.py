@@ -17,10 +17,11 @@ RSA-signed payload - confirmed by reading PowerSync's independent
 ``transport.py``, which never touches a password at all.
 
 We already have the DIN - it comes back from Tesla's cloud during pairing
-(``pairing.EnergySite.din``, from ``/api/1/products``), the same way
-PowerSync's own local client receives it. So the one thing pypowerwall's
-wrapper needs a password for, we don't need it for at all: this module talks
-to ``pypowerwall.tedapi.tedapi_v1r.TEDAPIv1r`` directly, skipping
+(``pairing.async_get_din``, via an existing Teslemetry config entry's
+``get_system_info`` call), the same way PowerSync's own local client
+receives it. So the one thing pypowerwall's wrapper needs a password for, we
+don't need it for at all: this module talks to
+``pypowerwall.tedapi.tedapi_v1r.TEDAPIv1r`` directly, skipping
 ``login()``/``get_din()`` entirely.
 
 Built entirely on pypowerwall's public names (``TEDAPIv1r``'s public

@@ -21,24 +21,38 @@ surface to core.
 3. Download, restart Home Assistant
 4. Settings → Devices & Services → **Add Integration** → LibrePower - Powerwall
 5. Pick which LibrePower core instance this Powerwall belongs to (skipped automatically if you only have one)
-6. Enter the Gateway address and password, plus your Powerwall's capacity and charge/discharge limits
+6. If you have Home Assistant's official **Teslemetry** integration set up with a battery-capable energy site, you'll be offered a choice: pair via Teslemetry (no Gateway password needed) or enter the Gateway address and password directly. Otherwise you'll go straight to the Gateway address/password form.
 
 ## How it works
 
 Wraps [pypowerwall](https://github.com/jasonacox/pypowerwall) (MIT) for local
 **gateway-password TEDAPI** access — no Tesla account needed for telemetry.
 Control (backup reserve, export rule, islanding) needs pypowerwall's **v1r**
-transport, which requires a one-time RSA key registered through Tesla — real,
-separate scope, and currently not reachable from this repo's config flow.
-This repo briefly shipped a "pair with my Tesla account, no password needed"
-setup path built on Tesla's Owner API; Tesla decommissioned that API for
-third-party callers in June 2026, which broke the only login mechanism it
-depended on, so it was pulled rather than left shipping a broken flow. The
-RSA key registration and pure-v1r read/write client (`pairing.py`,
-`powerwall_v1r.py`) are still correct and left in the repo - reviving the
-feature needs a Fleet API developer app (Tesla business-account approval, a
-real redirect URI) instead of a plain Tesla login. See `pairing.py`'s module
-docstring for the detail.
+transport, which requires a one-time RSA key registered through Tesla.
+
+Two ways to get that key registered:
+
+- **Gateway password mode**: works everywhere pypowerwall's TEDAPI reaches,
+  but as of some Powerwall 3 + Backup Gateway 2 firmware (confirmed 26.x),
+  local TEDAPI login is rejected outright regardless of password correctness
+  — see [jasonacox/pypowerwall#284](https://github.com/jasonacox/pypowerwall/issues/284).
+  Not something fixable from this repo.
+- **Pair via Teslemetry**: no Gateway password needed, at any step - even
+  the Gateway's physical DIN is read via Teslemetry's cloud API rather than
+  a local login. Bootstraps the same RSA-pairing protocol this repo briefly
+  drove via Tesla's own "Owner API" (decommissioned for third-party callers
+  in June 2026, which is why that path was pulled) through an *existing*
+  [Teslemetry](https://teslemetry.com) config entry instead — Teslemetry
+  already holds a registered, Tesla-approved Fleet API app, so this repo
+  never needs one of its own (no business account, no hosted redirect URI,
+  no custody of your Tesla tokens). Teslemetry is only touched during the
+  one-time pairing handshake; once the key is VERIFIED, everything is local
+  again via the same `powerwall_v1r.py` gateway-password mode already used.
+  Mirrors the exact pattern Teslemetry's own official companion integration,
+  [`hass-powerwall-v1r`](https://github.com/Teslemetry/hass-powerwall-v1r),
+  uses for the same purpose. See `pairing.py`'s module docstring for the
+  full design and its (deliberate) zero hard dependency on
+  Teslemetry/`tesla_fleet_api` at import time.
 
 Battery capacity and max charge/discharge power are entered during setup,
 not auto-detected — pypowerwall has no API to read nameplate capacity from
@@ -80,21 +94,20 @@ lifecycle, options-reload timing, or storage behave as expected end to end.
 
 ## Known gaps
 
-- **v1r pairing isn't wired into the UI.** `pairing.py` and `powerwall_v1r.py`
-  implement RSA key registration and a password-free v1r read/write client,
-  but the only login mechanism ever built for them (Tesla's Owner API) was
-  decommissioned by Tesla in June 2026 - every call now returns HTTP 403.
-  `powerwall.py` still picks pure-v1r mode automatically if an entry somehow
-  has `rsa_key_path`/`din` set, but nothing in `config_flow.py` can produce
-  those anymore. Reviving this needs a Fleet API developer app registration
-  (business account, Tesla approval, a real redirect URI) swapped in for
-  `pairing.py`'s login step - see that module's docstring.
+- **v1r pairing via Teslemetry is new and not yet validated against real
+  hardware end to end.** `pairing.py`'s protocol shape (payload structure,
+  state/type constants) has been cross-checked field-for-field against
+  `tesla_fleet_api`'s own actively-maintained, hardware-tested equivalents
+  and matches exactly - a strong signal, but not the same as a completed
+  real pairing. `async_get_din`'s field path for extracting the DIN from
+  Teslemetry's `get_system_info` response in particular hasn't been
+  confirmed against a live response. Needs a full run-through with a real
+  Teslemetry account and Powerwall once available.
 - **`powerwall_v1r.py`'s DeviceControllerQuery field parsing (SOC, power
   flows, grid status, alerts) is cross-referenced against pypowerwall's own
   and PowerSync's independent implementations, not validated against live
-  hardware by this repo.** Untested in practice since the only path that
-  reached it (pair-first setup) is currently disabled - re-verify before
-  reviving it.
+  hardware by this repo.** Same caveat as above - the pairing path that
+  reaches it is new; re-verify together once real hardware is available.
 
 ## Licensing
 
