@@ -69,8 +69,13 @@ class V1rSnapshot:
     """One parsed reading from a DeviceControllerQuery response."""
 
     __slots__ = (
-        "soc", "solar_w", "battery_w", "grid_w", "load_w",
-        "grid_connected", "alerts",
+        "alerts",
+        "battery_w",
+        "grid_connected",
+        "grid_w",
+        "load_w",
+        "soc",
+        "solar_w",
     )
 
     def __init__(

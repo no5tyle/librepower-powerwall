@@ -262,7 +262,8 @@ def _extract_key_state(resp: dict[str, Any], pubkey_der: bytes) -> int | None:
                 try:
                     if base64.b64decode(client_pubkey) != pubkey_der:
                         continue
-                except Exception:  # noqa: BLE001 - malformed field, not our key
+                except Exception as err:  # noqa: BLE001 - malformed field, not our key
+                    _LOGGER.debug("Skipping unparseable client public_key: %s", err)
                     continue
                 state = client.get("state", client.get("State"))
                 if state is not None:

@@ -16,11 +16,10 @@ import logging
 import os
 from typing import Any
 
+from custom_components.librepower import async_register_battery
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-
-from custom_components.librepower import async_register_battery
 
 from .const import (
     CONF_BATTERY_CAPACITY_WH,
