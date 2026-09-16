@@ -391,7 +391,7 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             state = None
 
         if state == pairing.STATE_VERIFIED:
-            return await self._finish_verified_pairing()
+            return await self.async_step_pair_verified()
 
         # Either no registration exists yet, or one does but isn't VERIFIED
         # (state check above failed to find it, or it's still PENDING).
@@ -444,7 +444,9 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             state = None
 
         if state == pairing.STATE_VERIFIED:
-            return await self._finish_verified_pairing()
+            # Deliberately a separate step, not called inline here - see
+            # async_step_pair_verified's own docstring for why.
+            return await self.async_step_pair_verified()
 
         return self.async_show_form(
             step_id="pair_confirm",
@@ -453,11 +455,34 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"site_name": self._pair_site_name},
         )
 
-    async def _finish_verified_pairing(self) -> ConfigFlowResult:
-        """Key is VERIFIED - look up the DIN and a best-effort host, then
-        move to the shared battery-specs/local-verify step.
+    async def async_step_pair_verified(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pairing is VERIFIED - a checkpoint screen before the DIN/host
+        lookups, not folded into pair_confirm's own submit.
+
+        get_system_info (for the DIN) and get_networking_status are each
+        their own live round-trip to the physical Gateway through
+        Teslemetry's gRPC-command proxy - not a cheap cached cloud read,
+        the same kind of call as the VERIFIED check itself. Chaining the
+        poll check plus both of these into the one submit that detects
+        VERIFIED means that single click can trigger three sequential
+        live-gateway round-trips - exactly the kind of stacking that
+        caused pair_confirm's own timeout before the sleep-loop fix, and
+        confirmed live: removing the sleep loop alone wasn't enough,
+        because this inline chaining was still there. Splitting DIN/host
+        lookup onto its own step's submit keeps pair_confirm's own click
+        down to the one call it was designed for.
         """
         assert self._pair_keypair is not None
+
+        if user_input is None:
+            return self.async_show_form(
+                step_id="pair_verified",
+                data_schema=vol.Schema({}),
+                description_placeholders={"site_name": self._pair_site_name},
+            )
+
         site_api = getattr(self._pair_site, "api", None)
 
         try:

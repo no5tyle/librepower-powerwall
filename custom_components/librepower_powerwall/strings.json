@@ -40,6 +40,11 @@
         "description": "A pairing request for \"{site_name}\" has been sent. On the Gateway, toggle the DC isolator breaker off then back on to confirm this is really your equipment - Tesla requires this physical proof of presence. You have about 2 minutes from when the request was sent.\n\nOnce toggled, submit this form and LibrePower will check whether it's been confirmed.",
         "data": {}
       },
+      "pair_verified": {
+        "title": "Pairing confirmed",
+        "description": "\"{site_name}\" is paired. Submit to look up the Gateway's local network details - this is a separate step from the confirmation check above, so a slow response here doesn't risk timing out the whole flow.",
+        "data": {}
+      },
       "pairing_battery_specs": {
         "title": "Confirm connection details",
         "description": "Pairing succeeded - no Gateway password needed from here on. The Gateway's local network address was auto-detected where possible; adjust it if it's wrong for your network.\n\nBattery capacity and charge/discharge limits are entered here because pypowerwall has no way to read them from the device automatically — use your Powerwall's nameplate rating (13500 Wh per unit is standard).\n\nCharge/discharge efficiency default to 0.90 if left as-is - a reasonable placeholder, not a measured value. Override only if you have a better manufacturer figure for your specific hardware.",
