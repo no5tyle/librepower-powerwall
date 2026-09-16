@@ -253,20 +253,43 @@ async def async_poll_key_state(site_api: Any, keypair: RsaKeypair) -> int | None
 
 
 def _extract_key_state(resp: dict[str, Any], pubkey_der: bytes) -> int | None:
-    """Pull this key's registration state out of Tesla's (inconsistently
-    cased) nested response shape.
+    """Pull this key's registration state out of Teslemetry's response.
 
-    Tesla's gRPC-over-JSON envelope has been observed with both PascalCase
-    and snake_case field names depending on endpoint/firmware version, so
-    every level is checked both ways rather than assumed.
+    Confirmed live (via async_poll_key_state's own diagnostic WARNING log,
+    against a real Teslemetry response) that both add_authorized_client and
+    list_authorized_clients return a flat shape - no gRPC envelope at all:
+
+        {"response": {"clients": [{"public_key": ..., "state": ..., ...}, ...]}}
+
+    (a single-client variant, ``{"response": {"client": {...}}}``, is
+    handled the same way in case a create-style call ever returns the one
+    client instead of the whole roster - not itself confirmed live, but a
+    reasonable enough shape to check for cheaply). This module's original
+    guess - a deep ``response.message.payload.authorization.message...``
+    gRPC-over-JSON envelope, reverse-engineered against the dead Owner API
+    and never validated against Teslemetry's actual response - is kept
+    below as a fallback in case some other call or a future Teslemetry
+    version ever does return that shape, but the flat shape above is what
+    real hardware actually sends and is checked first.
     """
+    response = resp.get("response") if isinstance(resp, dict) else None
+    if isinstance(response, dict):
+        clients = response.get("clients")
+        if clients is None:
+            client = response.get("client")
+            clients = [client] if isinstance(client, dict) else None
+        if isinstance(clients, list):
+            state = _find_state_by_pubkey(clients, pubkey_der)
+            if state is not None:
+                return state
+
+    # --- fallback: the original deep gRPC-envelope guess (unconfirmed) ---
     msg = _dig(resp, ("response", "message", "Payload", "Authorization", "Message"))
     if msg is None:
         msg = _dig(resp, ("response", "message", "payload", "authorization", "message"))
     if msg is None:
         return None
 
-    # A fresh registration response: AddAuthorizedClientResponse.client.state
     for key in ("AddAuthorizedClientResponse", "add_authorized_client_response"):
         if key in msg:
             client = msg[key].get("client") or msg[key].get("Client")
@@ -275,26 +298,39 @@ def _extract_key_state(resp: dict[str, Any], pubkey_der: bytes) -> int | None:
                 if state is not None:
                     return int(state)
 
-    # A verification poll: ListAuthorizedClientsResponse.clients[].state,
-    # matched by public key so a different already-verified key (e.g. the
-    # Tesla app's own) can't produce a false positive.
     for key in ("ListAuthorizedClientsResponse", "list_authorized_clients_response"):
         if key in msg:
             clients = msg[key].get("clients") or msg[key].get("Clients") or []
-            for client in clients:
-                client_pubkey = client.get("public_key") or client.get("PublicKey")
-                if not client_pubkey:
-                    continue
-                try:
-                    if base64.b64decode(client_pubkey) != pubkey_der:
-                        continue
-                except Exception as err:  # noqa: BLE001 - malformed field, not our key
-                    _LOGGER.debug("Skipping unparseable client public_key: %s", err)
-                    continue
-                state = client.get("state", client.get("State"))
-                if state is not None:
-                    return int(state)
+            state = _find_state_by_pubkey(clients, pubkey_der)
+            if state is not None:
+                return state
 
+    return None
+
+
+def _find_state_by_pubkey(clients: list[Any], pubkey_der: bytes) -> int | None:
+    """Match a client entry by public key (so a different already-
+    authorized key - e.g. the Tesla app's own, or a stale key from an
+    earlier attempt - can't produce a false positive) and return its
+    ``state``. Handles both PascalCase and snake_case field names, since
+    Tesla's responses have been observed with both depending on
+    endpoint/firmware version.
+    """
+    for client in clients:
+        if not isinstance(client, dict):
+            continue
+        client_pubkey = client.get("public_key") or client.get("PublicKey")
+        if not client_pubkey:
+            continue
+        try:
+            if base64.b64decode(client_pubkey) != pubkey_der:
+                continue
+        except Exception as err:  # noqa: BLE001 - malformed field, not our key
+            _LOGGER.debug("Skipping unparseable client public_key: %s", err)
+            continue
+        state = client.get("state", client.get("State"))
+        if state is not None:
+            return int(state)
     return None
 
 
