@@ -277,7 +277,7 @@ class PowerwallClient:
             raise PowerwallError("pypowerwall is not installed") from err
 
         try:
-            return pypowerwall.Powerwall(
+            pw = pypowerwall.Powerwall(
                 host=self._host,
                 gw_pwd=self._gw_pwd,
                 # No email/password: we are explicitly not using cloud auth.
@@ -289,6 +289,37 @@ class PowerwallClient:
             )
         except Exception as err:
             raise self._translate(err) from err
+
+        # pypowerwall's own connect() fallback (local -> fleetapi -> cloud)
+        # does NOT raise when every mode fails - it only logs internally
+        # (e.g. "Access Denied: Check your Gateway Password" from a rejected
+        # TEDAPI login, or a network-level failure) and leaves `pw.client`
+        # None, so the try/except above never fires for this case. Left
+        # unchecked, the first sign of trouble used to be async_get_snapshot's
+        # generic "Gateway returned no state-of-charge" once every read
+        # silently came back empty - true, but unhelpful, and not classified
+        # as an auth/unreachable error by _translate since there's no
+        # exception text to pattern-match on. Checking here instead gives a
+        # single, clear failure point with a pointer at the real reason,
+        # which is in the Home Assistant log (pypowerwall's own logger),
+        # not in anything this exception can carry - pypowerwall doesn't
+        # expose the swallowed per-mode reasons on the object itself.
+        if getattr(pw, "client", None) is None:
+            # Deliberately the plain base class, not PowerwallAuthError or
+            # PowerwallUnreachableError - pypowerwall gives us no signal here
+            # for which of those it actually was (see comment above), and a
+            # wrong guess would send the user chasing the wrong fix. The
+            # config flow's generic PowerwallError handler still surfaces
+            # this exact message via _LOGGER.error, which is what matters.
+            raise PowerwallError(
+                "Could not connect to the Powerwall Gateway - every mode "
+                "pypowerwall tried (local/fleetapi/cloud) failed. This "
+                "usually means the Gateway password is wrong, or the host "
+                "isn't reachable from Home Assistant. Check the Home "
+                "Assistant log for pypowerwall's own more specific reason "
+                "(e.g. 'Access Denied' means the password was rejected)."
+            )
+        return pw
 
     async def async_close(self) -> None:
         """Release the underlying session, if the library exposes one."""
