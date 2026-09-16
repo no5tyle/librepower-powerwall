@@ -467,18 +467,30 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 description_placeholders={"site_name": self._pair_site_name},
             )
 
-        site_api = getattr(self._pair_site, "api", None)
-
+        # Everything below is wrapped in one broad catch, not just the DIN
+        # lookup - a live report of "Unknown error occurred" here persisted
+        # even after the DIN-lookup-specific try/except (and everything
+        # upstream of it) was confirmed correct and up to date, which means
+        # whatever's failing is escaping that narrower try/except entirely -
+        # most likely in rendering the next step's form. _LOGGER.exception
+        # (not .error) so the full traceback lands under this integration's
+        # own logger name regardless of where in this method it actually
+        # happens, rather than relying on it surfacing under a Home
+        # Assistant core logger name a plain component-name log search
+        # would miss (see this step's git history for the full story of
+        # chasing this from the config-flow side alone).
         try:
-            din = await pairing.async_get_din(site_api)
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Reading the Gateway DIN via Teslemetry failed: %s", err)
-            return self.async_abort(reason="pair_din_failed")
-        if not din:
-            return self.async_abort(reason="pair_din_failed")
-        self._pair_din = din
+            site_api = getattr(self._pair_site, "api", None)
 
-        return await self.async_step_pairing_battery_specs()
+            din = await pairing.async_get_din(site_api)
+            if not din:
+                return self.async_abort(reason="pair_din_failed")
+            self._pair_din = din
+
+            return await self.async_step_pairing_battery_specs()
+        except Exception:
+            _LOGGER.exception("Unexpected error in async_step_pair_verified")
+            return self.async_abort(reason="pairing_unexpected_error")
 
     async def async_step_pairing_battery_specs(
         self, user_input: dict[str, Any] | None = None
@@ -486,94 +498,107 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         """Battery specs + a real local connectivity check - the same
         information async_step_powerwall collects, just without a password
         field, since v1r needs none (see pairing.py's module docstring).
+
+        The whole body is one broad try/except (not just the
+        PowerwallClient calls) for the same reason as
+        async_step_pair_verified's own outer catch - this step's initial
+        render (called with no user_input, right after pair_verified
+        succeeds) is exactly where a live "Unknown error occurred" report
+        could equally be coming from, and there's no way to tell from the
+        user's side which of the two steps it actually happened in.
         """
         assert self._pair_keypair is not None and self._pair_din is not None
         errors: dict[str, str] = {}
+        key_path: str | None = None
 
-        if user_input is not None:
-            host = user_input[CONF_GATEWAY_HOST]
-            key_path = self.hass.config.path(DOMAIN, f"pairing_verify_{self.flow_id}.pem")
+        try:
+            if user_input is not None:
+                host = user_input[CONF_GATEWAY_HOST]
+                key_path = self.hass.config.path(DOMAIN, f"pairing_verify_{self.flow_id}.pem")
 
-            def _write_temp_key() -> None:
-                os.makedirs(os.path.dirname(key_path), exist_ok=True)
-                fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w") as f:
-                    f.write(self._pair_keypair.private_key_pem)
+                def _write_temp_key() -> None:
+                    os.makedirs(os.path.dirname(key_path), exist_ok=True)
+                    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as f:
+                        f.write(self._pair_keypair.private_key_pem)
 
-            await self.hass.async_add_executor_job(_write_temp_key)
-            try:
-                client = PowerwallClient(
-                    self.hass,
-                    host=host,
-                    gateway_password="",
-                    capacity_wh=user_input[CONF_BATTERY_CAPACITY_WH],
-                    max_charge_w=user_input[CONF_MAX_CHARGE_W],
-                    max_discharge_w=user_input[CONF_MAX_DISCHARGE_W],
-                    charge_efficiency=user_input[CONF_CHARGE_EFFICIENCY],
-                    discharge_efficiency=user_input[CONF_DISCHARGE_EFFICIENCY],
-                    read_only=not self._control_enabled_for_core(),
-                    rsa_key_path=key_path,
-                    din=self._pair_din,
-                )
+                await self.hass.async_add_executor_job(_write_temp_key)
                 try:
-                    await client.async_connect()
-                except PowerwallUnreachableError as err:
-                    _LOGGER.warning("Local v1r Gateway unreachable at %s: %s", host, err)
-                    errors["base"] = "gateway_unreachable"
-                except PowerwallError as err:
-                    _LOGGER.error("Local v1r verify failed: %s", err)
-                    errors["base"] = "unknown"
-                else:
-                    await client.async_close()
-                    await self.async_set_unique_id(
-                        f"{self._data[CONF_CORE_ENTRY_ID]}_{host}"
+                    client = PowerwallClient(
+                        self.hass,
+                        host=host,
+                        gateway_password="",
+                        capacity_wh=user_input[CONF_BATTERY_CAPACITY_WH],
+                        max_charge_w=user_input[CONF_MAX_CHARGE_W],
+                        max_discharge_w=user_input[CONF_MAX_DISCHARGE_W],
+                        charge_efficiency=user_input[CONF_CHARGE_EFFICIENCY],
+                        discharge_efficiency=user_input[CONF_DISCHARGE_EFFICIENCY],
+                        read_only=not self._control_enabled_for_core(),
+                        rsa_key_path=key_path,
+                        din=self._pair_din,
                     )
-                    self._abort_if_unique_id_configured()
-                    self._data.update(
-                        {
-                            CONF_GATEWAY_HOST: host,
-                            CONF_BATTERY_CAPACITY_WH: user_input[CONF_BATTERY_CAPACITY_WH],
-                            CONF_MAX_CHARGE_W: user_input[CONF_MAX_CHARGE_W],
-                            CONF_MAX_DISCHARGE_W: user_input[CONF_MAX_DISCHARGE_W],
-                            CONF_CHARGE_EFFICIENCY: user_input[CONF_CHARGE_EFFICIENCY],
-                            CONF_DISCHARGE_EFFICIENCY: user_input[CONF_DISCHARGE_EFFICIENCY],
-                            CONF_RSA_PRIVATE_KEY_PEM: self._pair_keypair.private_key_pem,
-                            CONF_GATEWAY_DIN: self._pair_din,
-                        }
-                    )
-                    return self.async_create_entry(
-                        title=self._pair_site_name or "Powerwall", data=self._data
-                    )
-            finally:
-                # __init__.py's _async_ensure_rsa_key_file writes the real,
-                # per-entry-id key file on actual setup - this one only ever
-                # existed for this connectivity check.
-                await self.hass.async_add_executor_job(_remove_if_exists, key_path)
+                    try:
+                        await client.async_connect()
+                    except PowerwallUnreachableError as err:
+                        _LOGGER.warning("Local v1r Gateway unreachable at %s: %s", host, err)
+                        errors["base"] = "gateway_unreachable"
+                    except PowerwallError as err:
+                        _LOGGER.error("Local v1r verify failed: %s", err)
+                        errors["base"] = "unknown"
+                    else:
+                        await client.async_close()
+                        await self.async_set_unique_id(
+                            f"{self._data[CONF_CORE_ENTRY_ID]}_{host}"
+                        )
+                        self._abort_if_unique_id_configured()
+                        self._data.update(
+                            {
+                                CONF_GATEWAY_HOST: host,
+                                CONF_BATTERY_CAPACITY_WH: user_input[CONF_BATTERY_CAPACITY_WH],
+                                CONF_MAX_CHARGE_W: user_input[CONF_MAX_CHARGE_W],
+                                CONF_MAX_DISCHARGE_W: user_input[CONF_MAX_DISCHARGE_W],
+                                CONF_CHARGE_EFFICIENCY: user_input[CONF_CHARGE_EFFICIENCY],
+                                CONF_DISCHARGE_EFFICIENCY: user_input[CONF_DISCHARGE_EFFICIENCY],
+                                CONF_RSA_PRIVATE_KEY_PEM: self._pair_keypair.private_key_pem,
+                                CONF_GATEWAY_DIN: self._pair_din,
+                            }
+                        )
+                        return self.async_create_entry(
+                            title=self._pair_site_name or "Powerwall", data=self._data
+                        )
+                finally:
+                    # __init__.py's _async_ensure_rsa_key_file writes the
+                    # real, per-entry-id key file on actual setup - this one
+                    # only ever existed for this connectivity check.
+                    await self.hass.async_add_executor_job(_remove_if_exists, key_path)
 
-        return self.async_show_form(
-            step_id="pairing_battery_specs",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_GATEWAY_HOST, default=self._pair_host): str,
-                    vol.Required(
-                        CONF_BATTERY_CAPACITY_WH, default=DEFAULT_BATTERY_CAPACITY_WH
-                    ): vol.Coerce(float),
-                    vol.Required(
-                        CONF_MAX_CHARGE_W, default=DEFAULT_MAX_CHARGE_W
-                    ): vol.Coerce(float),
-                    vol.Required(
-                        CONF_MAX_DISCHARGE_W, default=DEFAULT_MAX_DISCHARGE_W
-                    ): vol.Coerce(float),
-                    vol.Optional(
-                        CONF_CHARGE_EFFICIENCY, default=DEFAULT_CHARGE_EFFICIENCY
-                    ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-                    vol.Optional(
-                        CONF_DISCHARGE_EFFICIENCY, default=DEFAULT_DISCHARGE_EFFICIENCY
-                    ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
-                }
-            ),
-            errors=errors,
-        )
+            return self.async_show_form(
+                step_id="pairing_battery_specs",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required(CONF_GATEWAY_HOST, default=self._pair_host): str,
+                        vol.Required(
+                            CONF_BATTERY_CAPACITY_WH, default=DEFAULT_BATTERY_CAPACITY_WH
+                        ): vol.Coerce(float),
+                        vol.Required(
+                            CONF_MAX_CHARGE_W, default=DEFAULT_MAX_CHARGE_W
+                        ): vol.Coerce(float),
+                        vol.Required(
+                            CONF_MAX_DISCHARGE_W, default=DEFAULT_MAX_DISCHARGE_W
+                        ): vol.Coerce(float),
+                        vol.Optional(
+                            CONF_CHARGE_EFFICIENCY, default=DEFAULT_CHARGE_EFFICIENCY
+                        ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+                        vol.Optional(
+                            CONF_DISCHARGE_EFFICIENCY, default=DEFAULT_DISCHARGE_EFFICIENCY
+                        ): vol.All(vol.Coerce(float), vol.Range(min=0.0, max=1.0)),
+                    }
+                ),
+                errors=errors,
+            )
+        except Exception:
+            _LOGGER.exception("Unexpected error in async_step_pairing_battery_specs")
+            return self.async_abort(reason="pairing_unexpected_error")
 
     # -- reauth: gateway password ---------------------------------------------
 
