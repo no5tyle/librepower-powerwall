@@ -238,9 +238,16 @@ class PowerwallClient:
 
     async def async_connect(self) -> None:
         """Construct the pypowerwall client and verify we can talk to it."""
+        _LOGGER.debug(
+            "async_connect: entered, host=%s v1r=%s read_only=%s",
+            self._host,
+            self._is_v1r,
+            self._read_only,
+        )
         self._pw = await self._hass.async_add_executor_job(self._build_client)
         # A snapshot is the real connectivity test; construction alone is lazy.
         await self.async_get_snapshot()
+        _LOGGER.debug("async_connect: initial snapshot OK, connection verified")
         if not self._read_only:
             # Remember whatever reserve is already set, *before* this
             # adapter ever writes to it, so async_release() can restore it
@@ -258,10 +265,16 @@ class PowerwallClient:
             except Exception as err:  # noqa: BLE001 - best-effort, never fatal
                 _LOGGER.debug("Could not read current reserve to remember it: %s", err)
                 self._original_reserve_percent = None
+            else:
+                _LOGGER.debug(
+                    "async_connect: captured original reserve=%s to restore later",
+                    self._original_reserve_percent,
+                )
 
     def _build_client(self) -> Any:
         """Blocking. Runs in executor."""
         if self._is_v1r:
+            _LOGGER.debug("_build_client: building V1rClient for host=%s", self._host)
             try:
                 from .powerwall_v1r import V1rClient
 
@@ -271,6 +284,7 @@ class PowerwallClient:
             except Exception as err:
                 raise self._translate(err) from err
 
+        _LOGGER.debug("_build_client: building pypowerwall.Powerwall for host=%s", self._host)
         try:
             import pypowerwall
         except ImportError as err:  # pragma: no cover - dependency declared
@@ -319,10 +333,12 @@ class PowerwallClient:
                 "Assistant log for pypowerwall's own more specific reason "
                 "(e.g. 'Access Denied' means the password was rejected)."
             )
+        _LOGGER.debug("_build_client: pypowerwall.Powerwall connected OK")
         return pw
 
     async def async_close(self) -> None:
         """Release the underlying session, if the library exposes one."""
+        _LOGGER.debug("async_close: entered, connected=%s", self._pw is not None)
         if self._pw is None:
             return
         close = getattr(self._pw, "close", None)
@@ -336,7 +352,18 @@ class PowerwallClient:
         """Fetch one live snapshot of the system."""
         if self._pw is None:
             raise PowerwallError("Powerwall client is not connected")
-        return await self._hass.async_add_executor_job(self._read_snapshot)
+        snapshot = await self._hass.async_add_executor_job(self._read_snapshot)
+        _LOGGER.debug(
+            "async_get_snapshot: soc=%.3f solar_w=%.0f battery_w=%.0f grid_w=%.0f load_w=%.0f grid_connected=%s status=%s",
+            snapshot.soc,
+            snapshot.solar_w,
+            snapshot.battery_w,
+            snapshot.grid_w,
+            snapshot.load_w,
+            snapshot.grid_connected,
+            snapshot.operational_status,
+        )
+        return snapshot
 
     def _read_snapshot(self) -> BatterySnapshot:
         """Blocking. Runs in executor."""
@@ -456,6 +483,7 @@ class PowerwallClient:
             raise ValueError(f"target_soc must be 0-1, got {target_soc}")
         current = self._last_known_soc
         reserve = max(target_soc, current) if current is not None else target_soc
+        _LOGGER.debug("async_charge: target_soc=%.3f current=%s -> reserve=%.1f%%", target_soc, current, reserve * 100.0)
         await self._call_write("set_reserve", reserve * 100.0)
 
     async def async_discharge(self, target_soc: float) -> None:
@@ -465,6 +493,7 @@ class PowerwallClient:
         """
         if not 0.0 <= target_soc <= 1.0:
             raise ValueError(f"target_soc must be 0-1, got {target_soc}")
+        _LOGGER.debug("async_discharge: target_soc=%.3f -> reserve=%.1f%%", target_soc, target_soc * 100.0)
         await self._call_write("set_reserve", target_soc * 100.0)
 
     async def async_hold(self, soc: float) -> None:
@@ -474,6 +503,7 @@ class PowerwallClient:
         """
         if not 0.0 <= soc <= 1.0:
             raise ValueError(f"soc must be 0-1, got {soc}")
+        _LOGGER.debug("async_hold: soc=%.3f -> reserve=%.1f%%", soc, soc * 100.0)
         await self._call_write("set_reserve", soc * 100.0)
 
     async def async_release(self) -> None:
@@ -490,6 +520,10 @@ class PowerwallClient:
 
         Requires v1r. See module docstring.
         """
+        _LOGGER.debug(
+            "async_release: entered, restoring original reserve=%s",
+            self._original_reserve_percent,
+        )
         await self._call_write("set_mode", "self_consumption")
         if self._original_reserve_percent is not None:
             await self._call_write("set_reserve", self._original_reserve_percent)
@@ -512,12 +546,14 @@ class PowerwallClient:
         (see PowerwallIslandingBlockedError) - Tesla's go_off_grid() itself
         has neither. Requires v1r either way. See module docstring.
         """
+        _LOGGER.debug("async_curtail_export: entered, level=%s", level)
         if level == "soft":
             await self._call_write("set_grid_export", "never")
         elif level == "strong":
             self._check_islanding_allowed()
             await self._call_write("go_off_grid")
             self._islanding_started_at = datetime.now(timezone.utc)
+            _LOGGER.debug("async_curtail_export: strong curtailment (islanding) started")
         else:
             raise ValueError(f"Invalid curtailment level: {level}")
 
@@ -527,6 +563,7 @@ class PowerwallClient:
         If currently islanded (strong curtailment), this also reconnects to
         grid; if soft-curtailed, this just re-permits export. Requires v1r.
         """
+        _LOGGER.debug("async_allow_export: entered")
         await self._call_write("reconnect_grid")
         await self._call_write("set_grid_export", "battery_ok")
         self._record_islanding_ended()
@@ -609,6 +646,7 @@ class PowerwallClient:
             self._islanding_seconds_today = 0.0
 
     async def _call_write(self, method_name: str, *args: Any) -> None:
+        _LOGGER.debug("_call_write: entered, method=%s args=%s", method_name, args)
         if self._read_only:
             _LOGGER.debug(
                 "Shadow mode: suppressed %s%s", method_name, args
@@ -657,6 +695,7 @@ class PowerwallClient:
                 "gateway-password-only mode can read telemetry but cannot "
                 "write."
             )
+        _LOGGER.debug("_call_write: %s succeeded", method_name)
 
     # -- error mapping --------------------------------------------------------
 
@@ -670,7 +709,10 @@ class PowerwallClient:
         """
         text = str(err).lower()
         if any(k in text for k in ("auth", "password", "403", "unauthorized")):
+            _LOGGER.debug("_translate: classified as auth error: %s", err)
             return PowerwallAuthError(str(err))
         if any(k in text for k in ("timeout", "unreachable", "refused", "route")):
+            _LOGGER.debug("_translate: classified as unreachable error: %s", err)
             return PowerwallUnreachableError(str(err))
+        _LOGGER.debug("_translate: classified as generic error: %s", err)
         return PowerwallError(str(err))
