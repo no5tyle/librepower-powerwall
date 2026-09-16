@@ -94,20 +94,29 @@ lifecycle, options-reload timing, or storage behave as expected end to end.
 
 ## Known gaps
 
-- **v1r pairing via Teslemetry is new and not yet validated against real
-  hardware end to end.** `pairing.py`'s protocol shape (payload structure,
-  state/type constants) has been cross-checked field-for-field against
-  `tesla_fleet_api`'s own actively-maintained, hardware-tested equivalents
-  and matches exactly - a strong signal, but not the same as a completed
-  real pairing. `async_get_din`'s field path for extracting the DIN from
-  Teslemetry's `get_system_info` response in particular hasn't been
-  confirmed against a live response. Needs a full run-through with a real
-  Teslemetry account and Powerwall once available.
+- **v1r pairing via Teslemetry has been exercised against real hardware,
+  including a real bug found and fixed this way.** `pairing.py`'s payload
+  structure and state/type constants were cross-checked field-for-field
+  against `tesla_fleet_api`'s own request-building code and matched
+  exactly, but the *response* shape was still a guess - and turned out to
+  be wrong: `_extract_key_state` assumed a deep gRPC-over-JSON envelope
+  (reverse-engineered against the old, now-dead Owner API), but a real
+  captured response showed Teslemetry actually returns a flat
+  `{"response": {"clients": [...]}}` shape with no envelope at all. Fixed
+  and confirmed against that real captured response (kept as a literal
+  test fixture). `async_get_din`'s field path was hardened the same way
+  as a precaution but hasn't itself been captured live yet - both
+  `async_poll_key_state`/`async_register_key` and `async_get_din` now log
+  the full raw response at WARNING level if they can't find what they're
+  looking for, so any remaining shape mismatch surfaces immediately in
+  the Home Assistant log rather than as a silent "still pending".
 - **`powerwall_v1r.py`'s DeviceControllerQuery field parsing (SOC, power
   flows, grid status, alerts) is cross-referenced against pypowerwall's own
   and PowerSync's independent implementations, not validated against live
-  hardware by this repo.** Same caveat as above - the pairing path that
-  reaches it is new; re-verify together once real hardware is available.
+  hardware by this repo.** Unlike the pairing response shape above, this
+  is the *local* v1r query path (after pairing completes) and hasn't been
+  exercised against real hardware yet - re-verify once pairing reaches
+  that step end to end.
 
 ## Licensing
 
