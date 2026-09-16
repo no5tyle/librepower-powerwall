@@ -271,30 +271,44 @@ async def async_poll_key_state(site_api: Any, keypair: RsaKeypair) -> int | None
 def _extract_key_state(resp: dict[str, Any], pubkey_der: bytes) -> int | None:
     """Pull this key's registration state out of Teslemetry's response.
 
-    Confirmed live (via async_poll_key_state's own diagnostic WARNING log,
-    against a real Teslemetry response) that both add_authorized_client and
-    list_authorized_clients return a flat shape - no gRPC envelope at all:
+    Confirmed live (via async_poll_key_state's/async_register_key's own
+    diagnostic WARNING logs, against real Teslemetry responses) that
+    there's no gRPC envelope at all, but the two calls don't even share
+    one flat shape with each other:
 
+        # list_authorized_clients - a wrapped list
         {"response": {"clients": [{"public_key": ..., "state": ..., ...}, ...]}}
 
-    (a single-client variant, ``{"response": {"client": {...}}}``, is
-    handled the same way in case a create-style call ever returns the one
-    client instead of the whole roster - not itself confirmed live, but a
-    reasonable enough shape to check for cheaply). This module's original
-    guess - a deep ``response.message.payload.authorization.message...``
-    gRPC-over-JSON envelope, reverse-engineered against the dead Owner API
-    and never validated against Teslemetry's actual response - is kept
-    below as a fallback in case some other call or a future Teslemetry
-    version ever does return that shape, but the flat shape above is what
-    real hardware actually sends and is checked first.
+        # add_authorized_client - the single client's own fields
+        # flattened directly onto "response", no wrapping key at all
+        {"response": {"public_key": ..., "state": ..., ...}}
+
+    Both confirmed live, not guessed - the second shape was this module's
+    first real miss even after the initial live-response fix: it assumed
+    a single client would still be wrapped in a "client" key (a
+    reasonable-looking guess that turned out wrong), which is kept below
+    as a secondary check in case some response ever is shaped that way,
+    but response-itself-is-the-client is what add_authorized_client
+    actually sends and is checked first, right after the wrapped-list
+    shape. This module's *original* guess - a deep
+    ``response.message.payload.authorization.message...`` gRPC-over-JSON
+    envelope, reverse-engineered against the dead Owner API and never
+    seen in any real Teslemetry response - is kept furthest down as a
+    last-resort fallback only.
     """
     response = resp.get("response") if isinstance(resp, dict) else None
     if isinstance(response, dict):
-        clients = response.get("clients")
-        if clients is None:
-            client = response.get("client")
-            clients = [client] if isinstance(client, dict) else None
-        if isinstance(clients, list):
+        clients: list[Any] | None = None
+        if isinstance(response.get("clients"), list):
+            clients = response["clients"]
+        elif isinstance(response.get("client"), dict):
+            clients = [response["client"]]
+        elif "public_key" in response or "PublicKey" in response:
+            # add_authorized_client's actual confirmed shape: response
+            # itself carries the client's fields directly, no wrapper.
+            clients = [response]
+
+        if clients is not None:
             state = _find_state_by_pubkey(clients, pubkey_der)
             if state is not None:
                 return state
