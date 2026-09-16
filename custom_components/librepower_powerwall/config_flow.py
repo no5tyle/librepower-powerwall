@@ -43,7 +43,6 @@ energysites` or `.api`, this breaks silently rather than at import time.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from typing import Any
@@ -97,11 +96,13 @@ from .powerwall import (
 _LOGGER = logging.getLogger(__name__)
 
 # The Gateway only honours a freshly-registered key's physical breaker
-# toggle for ~2 minutes (per hass-powerwall-v1r's own comment on the same
-# protocol) - this bounded poll window matches that, checked every 5s so a
-# quick toggle doesn't sit waiting for the full interval.
-_PAIR_POLL_ATTEMPTS = 24
-_PAIR_POLL_INTERVAL_SECONDS = 5
+# toggle for roughly 2 minutes (per hass-powerwall-v1r's own comment on the
+# same protocol) - referenced in async_step_pair_confirm's docstring and
+# strings.json's pair_confirm description, not enforced here as a timed
+# loop (see that docstring for why: a bounded sleep loop inside one config
+# flow step blocked long enough to hit Home Assistant's own frontend/
+# websocket timeout in practice, before ever getting the chance to see
+# VERIFIED).
 
 
 def _extract_host(networking_status: dict[str, Any] | None) -> str:
@@ -409,7 +410,23 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_pair_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Prompt for the physical breaker toggle, then poll for VERIFIED."""
+        """Prompt for the physical breaker toggle, then check for VERIFIED.
+
+        One check per submission, not a sleep loop - matches
+        pairing.async_poll_key_state's own documented design ("a single
+        attempt, not a loop... so a slow Tesla response never blocks a
+        config flow step for longer than one HTTP call"). An earlier
+        version of this step polled in a bounded sleep loop instead
+        (mirroring hass-powerwall-v1r's own pattern), which in practice
+        blocked a single flow-step call for up to two minutes and hit
+        Home Assistant's own frontend/websocket timeout before the loop
+        ever got a chance to see VERIFIED - the user saw a bare "timed
+        out" with no indication pairing might still be in progress.
+        Checking once per submit keeps every single call fast; the user
+        just clicks Submit again if the Gateway hasn't confirmed yet -
+        normal within the ~2-minute post-toggle window (see the module-
+        level comment above _extract_host for that window's source).
+        """
         assert self._pair_keypair is not None and self._pair_site is not None
 
         if user_input is None:
@@ -420,15 +437,14 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             )
 
         site_api = getattr(self._pair_site, "api", None)
-        for _ in range(_PAIR_POLL_ATTEMPTS):
-            try:
-                state = await pairing.async_poll_key_state(site_api, self._pair_keypair)
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.debug("Pairing poll attempt failed, retrying: %s", err)
-                state = None
-            if state == pairing.STATE_VERIFIED:
-                return await self._finish_verified_pairing()
-            await asyncio.sleep(_PAIR_POLL_INTERVAL_SECONDS)
+        try:
+            state = await pairing.async_poll_key_state(site_api, self._pair_keypair)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Pairing poll attempt failed, will retry on next submit: %s", err)
+            state = None
+
+        if state == pairing.STATE_VERIFIED:
+            return await self._finish_verified_pairing()
 
         return self.async_show_form(
             step_id="pair_confirm",
