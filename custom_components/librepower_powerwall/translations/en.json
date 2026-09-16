@@ -78,7 +78,8 @@
       "teslemetry_site_unavailable": "That Teslemetry energy site isn't available right now. Try again, or use the Gateway password instead.",
       "teslemetry_not_loaded": "The Teslemetry integration isn't loaded anymore. Try again, or use the Gateway password instead.",
       "pair_register_failed": "Could not register the pairing key with Teslemetry. Check the Home Assistant logs, or use the Gateway password instead.",
-      "pair_din_failed": "Pairing succeeded but the Gateway's identifier couldn't be read from Teslemetry. Check the Home Assistant logs, or use the Gateway password instead."
+      "pair_din_failed": "Pairing succeeded but the Gateway's identifier couldn't be read from Teslemetry. Check the Home Assistant logs, or use the Gateway password instead.",
+      "pairing_unexpected_error": "Something went wrong finishing pairing. Check the Home Assistant logs for 'librepower_powerwall' - the full error is logged there - or use the Gateway password instead."
     }
   },
   "options": {
