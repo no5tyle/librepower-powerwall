@@ -174,22 +174,38 @@ async def async_get_din(site_api: Any) -> str | None:
     No local Gateway login/password needed - unlike Teslemetry's own
     hass-powerwall-v1r companion, which discovers the DIN via a locally-
     authenticated aiopowerwall.connect() call instead (see module
-    docstring). Tesla's gRPC-over-JSON response casing is inconsistent
-    (both PascalCase and snake_case observed depending on endpoint/firmware
-    - see _extract_key_state's own note), so several field-name candidates
-    are tried. Field path not yet confirmed against live hardware - flag
-    honestly, matching powerwall_v1r.py's own "should work, wants
-    verification" caveat for a similar reason.
+    docstring).
+
+    Field path confidence: ``("response", "din")`` (checked first) is the
+    flat shape, matching what list_authorized_clients was confirmed to
+    actually return live (see _extract_key_state's own note) - a live
+    capture of get_system_info's own response would be needed to be fully
+    sure it's shaped the same way rather than nesting "din" one level
+    deeper, but it's a reasonable inference from a sibling call on the
+    same API. The deep gRPC-envelope paths are kept as a fallback only
+    (the original, now-disproven-for-list_authorized_clients guess),
+    checked both PascalCase and snake_case since that inconsistency has
+    been observed elsewhere in these responses.
     """
     response = await site_api.get_system_info()
     for path in (
+        ("response", "din"),
         ("response", "message", "Payload", "Common", "Message", "GetSystemInfoResponse", "din"),
         ("response", "message", "payload", "common", "message", "get_system_info_response", "din"),
-        ("response", "din"),
     ):
         value = _dig(response, path)
         if isinstance(value, str) and value:
             return value
+    # Same reasoning as async_poll_key_state's own WARNING log: a
+    # get_system_info response we can't find "din" in at all is worth
+    # seeing in full - this call's actual shape has never been captured
+    # live (unlike list_authorized_clients, whose capture is what found
+    # the bug these field-path guesses were fixed against).
+    _LOGGER.warning(
+        "Could not find the Gateway DIN in Teslemetry's get_system_info "
+        "response - full response for diagnosis: %s",
+        response,
+    )
     return None
 
 
