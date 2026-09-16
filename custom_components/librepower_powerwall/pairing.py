@@ -208,7 +208,17 @@ async def async_register_key(site_api: Any, keypair: RsaKeypair) -> int | None:
         key_type=_KEY_TYPE_RSA,
         authorized_client_type=_AUTHORIZED_CLIENT_TYPE_CUSTOMER_MOBILE_APP,
     )
-    return _extract_key_state(response, keypair.public_key_der)
+    state = _extract_key_state(response, keypair.public_key_der)
+    if state is None:
+        # Same reasoning as async_poll_key_state's own WARNING log - a
+        # registration response we can't parse the state out of is worth
+        # seeing in full, not silently swallowed.
+        _LOGGER.warning(
+            "Could not read a state back from key registration - full "
+            "response for diagnosis: %s",
+            response,
+        )
+    return state
 
 
 async def async_poll_key_state(site_api: Any, keypair: RsaKeypair) -> int | None:
@@ -220,7 +230,23 @@ async def async_poll_key_state(site_api: Any, keypair: RsaKeypair) -> int | None
     never blocks a config flow step indefinitely.
     """
     response = await site_api.list_authorized_clients()
-    return _extract_key_state(response, keypair.public_key_der)
+    state = _extract_key_state(response, keypair.public_key_der)
+    if state is None:
+        # Either our key isn't in the response at all yet, or it is but
+        # _extract_key_state's field-path guesses didn't match how this
+        # response is actually shaped - not yet confirmed against live
+        # hardware (see this module's own docstring). Logged at WARNING
+        # (not DEBUG) specifically so it shows up without the user needing
+        # to first enable debug logging - if Tesla's own app confirms
+        # pairing succeeded but this keeps returning None, this line is
+        # what tells us whether the key truly isn't listed yet or our
+        # parsing just doesn't recognise the shape it came back in.
+        _LOGGER.warning(
+            "Pairing key not found as VERIFIED in Teslemetry's response - "
+            "full response for diagnosis: %s",
+            response,
+        )
+    return state
 
 
 # -- internals ----------------------------------------------------------------
