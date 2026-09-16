@@ -49,6 +49,10 @@ import os
 from typing import Any
 
 import voluptuous as vol
+from custom_components.librepower.const import (
+    CONF_CONTROL_ENABLED,
+    DEFAULT_CONTROL_ENABLED,
+)
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigEntryState,
@@ -57,11 +61,6 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
-
-from custom_components.librepower.const import (
-    CONF_CONTROL_ENABLED,
-    DEFAULT_CONTROL_ENABLED,
-)
 
 from . import pairing
 from .const import (
@@ -161,7 +160,7 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> "LibrePowerPowerwallOptionsFlow":
+    def async_get_options_flow(config_entry: ConfigEntry) -> LibrePowerPowerwallOptionsFlow:
         return LibrePowerPowerwallOptionsFlow()
 
     # -- step 1: which core instance ------------------------------------------
