@@ -1,9 +1,9 @@
 {
   "domain": "librepower_powerwall",
   "name": "LibrePower - Powerwall",
+  "after_dependencies": ["teslemetry"],
   "codeowners": [],
   "config_flow": true,
-  "after_dependencies": ["teslemetry"],
   "dependencies": ["librepower"],
   "documentation": "https://github.com/no5tyle/librepower-powerwall",
   "iot_class": "local_polling",
