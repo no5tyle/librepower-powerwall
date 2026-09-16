@@ -245,7 +245,12 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 await client.async_connect()
             except PowerwallAuthError:
                 errors["base"] = "invalid_gateway_password"
-            except PowerwallUnreachableError:
+            except PowerwallUnreachableError as err:
+                # WARNING (not silent) so the real underlying reason - a
+                # genuine connection failure, or a different error that
+                # _translate's keyword-matching happened to classify as
+                # "unreachable" - is visible without enabling debug logging.
+                _LOGGER.warning("Gateway unreachable at %s: %s", user_input[CONF_GATEWAY_HOST], err)
                 errors["base"] = "gateway_unreachable"
             except PowerwallError as err:
                 _LOGGER.error("Powerwall setup failed: %s", err)
@@ -512,7 +517,8 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
                 try:
                     await client.async_connect()
-                except PowerwallUnreachableError:
+                except PowerwallUnreachableError as err:
+                    _LOGGER.warning("Local v1r Gateway unreachable at %s: %s", host, err)
                     errors["base"] = "gateway_unreachable"
                 except PowerwallError as err:
                     _LOGGER.error("Local v1r verify failed: %s", err)
@@ -606,9 +612,11 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 await client.async_connect()
             except PowerwallAuthError:
                 errors["base"] = "invalid_gateway_password"
-            except PowerwallUnreachableError:
+            except PowerwallUnreachableError as err:
+                _LOGGER.warning("Gateway unreachable at %s: %s", entry.data[CONF_GATEWAY_HOST], err)
                 errors["base"] = "gateway_unreachable"
-            except PowerwallError:
+            except PowerwallError as err:
+                _LOGGER.error("Reauth verify failed: %s", err)
                 errors["base"] = "unknown"
             else:
                 await client.async_close()
