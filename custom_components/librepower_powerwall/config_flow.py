@@ -138,19 +138,31 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        _LOGGER.debug("async_step_user: entered, user_input=%s", user_input)
         core_entries = self.hass.config_entries.async_entries(CORE_DOMAIN)
         if not core_entries:
+            _LOGGER.debug("async_step_user: no librepower core entries found, aborting")
             return self.async_abort(reason="core_not_configured")
 
         if len(core_entries) == 1:
             # Don't make the user pick from a list of one.
+            _LOGGER.debug(
+                "async_step_user: exactly one core entry (%s), auto-selected",
+                core_entries[0].entry_id,
+            )
             self._data[CONF_CORE_ENTRY_ID] = core_entries[0].entry_id
             return await self.async_step_connection_method()
 
         if user_input is not None:
+            _LOGGER.debug(
+                "async_step_user: core entry %s chosen by user", user_input[CONF_CORE_ENTRY_ID]
+            )
             self._data[CONF_CORE_ENTRY_ID] = user_input[CONF_CORE_ENTRY_ID]
             return await self.async_step_connection_method()
 
+        _LOGGER.debug(
+            "async_step_user: %d core entries found, showing picker", len(core_entries)
+        )
         choices = {entry.entry_id: entry.title for entry in core_entries}
         return self.async_show_form(
             step_id="user",
@@ -169,11 +181,12 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         anything Teslemetry-specific. Empty (not an exception) if the
         `teslemetry` domain has no loaded entries at all.
         """
-        entries = [
-            e
-            for e in self.hass.config_entries.async_entries("teslemetry")
-            if e.state is ConfigEntryState.LOADED
-        ]
+        all_entries = self.hass.config_entries.async_entries("teslemetry")
+        entries = [e for e in all_entries if e.state is ConfigEntryState.LOADED]
+        _LOGGER.debug(
+            "_loaded_teslemetry_sites: %d teslemetry entries total, %d loaded",
+            len(all_entries), len(entries),
+        )
         pairs: list[tuple[ConfigEntry, Any]] = []
         for entry in entries:
             energysites = getattr(getattr(entry, "runtime_data", None), "energysites", None) or []
@@ -185,20 +198,31 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 # every site because one field wasn't where expected.
                 if getattr(site, "can_local_control", True):
                     pairs.append((entry, site))
+        _LOGGER.debug(
+            "_loaded_teslemetry_sites: %d usable site(s) found: %s",
+            len(pairs), [self._site_label(e, s) for e, s in pairs],
+        )
         return pairs
 
     async def async_step_connection_method(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Offer Teslemetry pairing only when it's actually usable."""
+        _LOGGER.debug("async_step_connection_method: entered, user_input=%s", user_input)
         if not self._loaded_teslemetry_sites():
+            _LOGGER.debug(
+                "async_step_connection_method: no usable Teslemetry sites, "
+                "falling through to gateway-password form"
+            )
             return await self.async_step_powerwall()
 
         if user_input is not None:
+            _LOGGER.debug("async_step_connection_method: method chosen = %s", user_input["method"])
             if user_input["method"] == "teslemetry":
                 return await self.async_step_pair_teslemetry()
             return await self.async_step_powerwall()
 
+        _LOGGER.debug("async_step_connection_method: showing method choice form")
         return self.async_show_form(
             step_id="connection_method",
             data_schema=vol.Schema(
@@ -218,6 +242,10 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_powerwall(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        _LOGGER.debug(
+            "async_step_powerwall: entered, user_input=%s",
+            {**user_input, CONF_GATEWAY_PASSWORD: "***"} if user_input else None,
+        )
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -228,6 +256,10 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 core_entry.options.get(CONF_CONTROL_ENABLED, DEFAULT_CONTROL_ENABLED)
                 if core_entry
                 else DEFAULT_CONTROL_ENABLED
+            )
+            _LOGGER.debug(
+                "async_step_powerwall: connecting to %s (control_enabled=%s)",
+                user_input[CONF_GATEWAY_HOST], control_enabled,
             )
 
             client = PowerwallClient(
@@ -244,6 +276,7 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 await client.async_connect()
             except PowerwallAuthError:
+                _LOGGER.debug("async_step_powerwall: invalid gateway password")
                 errors["base"] = "invalid_gateway_password"
             except PowerwallUnreachableError as err:
                 # WARNING (not silent) so the real underlying reason - a
@@ -256,6 +289,10 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.error("Powerwall setup failed: %s", err)
                 errors["base"] = "unknown"
             else:
+                _LOGGER.debug(
+                    "async_step_powerwall: connected OK, creating entry for %s",
+                    user_input[CONF_GATEWAY_HOST],
+                )
                 await client.async_close()
                 await self.async_set_unique_id(
                     f"{self._data[CONF_CORE_ENTRY_ID]}_{user_input[CONF_GATEWAY_HOST]}"
@@ -266,6 +303,7 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                     title="Powerwall", data=self._data
                 )
 
+        _LOGGER.debug("async_step_powerwall: showing gateway-password form")
         return self.async_show_form(
             step_id="powerwall",
             data_schema=vol.Schema(
@@ -308,27 +346,43 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Pick which Teslemetry energy site to pair, if there's more than one."""
+        _LOGGER.debug("async_step_pair_teslemetry: entered, user_input=%s", user_input)
         sites = self._loaded_teslemetry_sites()
         if not sites:
             # Raced with something unloading Teslemetry between the previous
             # step and this one - fall back rather than get stuck.
+            _LOGGER.debug(
+                "async_step_pair_teslemetry: no sites available (raced with "
+                "Teslemetry unloading?), falling back to gateway-password form"
+            )
             return await self.async_step_powerwall()
 
         if len(sites) == 1:
             entry, site = sites[0]
+            _LOGGER.debug(
+                "async_step_pair_teslemetry: exactly one site (%s), auto-selected",
+                self._site_label(entry, site),
+            )
             return await self._start_pairing(entry, site)
 
         if user_input is not None:
             chosen_id = user_input["site"]
+            _LOGGER.debug("async_step_pair_teslemetry: site %s chosen by user", chosen_id)
             for entry, site in sites:
                 if f"{entry.entry_id}:{getattr(site, 'id', '')}" == chosen_id:
                     return await self._start_pairing(entry, site)
+            _LOGGER.debug(
+                "async_step_pair_teslemetry: chosen site %s no longer in the "
+                "list, re-showing picker",
+                chosen_id,
+            )
             return await self.async_step_pair_teslemetry()
 
         choices = {
             f"{entry.entry_id}:{getattr(site, 'id', '')}": self._site_label(entry, site)
             for entry, site in sites
         }
+        _LOGGER.debug("async_step_pair_teslemetry: showing site picker: %s", choices)
         return self.async_show_form(
             step_id="pair_teslemetry",
             data_schema=vol.Schema({vol.Required("site"): vol.In(choices)}),
@@ -345,17 +399,27 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         to the breaker-toggle confirmation step - or straight past it if
         this exact key is already VERIFIED (a resumed/retried flow).
         """
+        _LOGGER.debug("_start_pairing: entered for site %s", self._site_label(entry, site))
         self._pair_entry = entry
         self._pair_site = site
         self._pair_site_name = self._site_label(entry, site)
 
         if self._pair_keypair is None:
+            _LOGGER.debug("_start_pairing: generating a fresh RSA-4096 keypair")
             self._pair_keypair = await self.hass.async_add_executor_job(
                 pairing.generate_rsa_keypair
+            )
+        else:
+            _LOGGER.debug(
+                "_start_pairing: reusing this flow's existing keypair "
+                "(fingerprint %s) - already generated on an earlier attempt "
+                "in this same flow",
+                self._pair_keypair.fingerprint_sha256[:12],
             )
 
         site_api = getattr(site, "api", None)
         if site_api is None:
+            _LOGGER.debug("_start_pairing: site has no .api attribute, aborting")
             return self.async_abort(reason="teslemetry_site_unavailable")
 
         try:
@@ -363,8 +427,10 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         except Exception as err:  # noqa: BLE001 - tesla_fleet_api's own hierarchy, kept import-free (see module docstring)
             _LOGGER.warning("Checking existing pairing state failed: %s", err)
             state = None
+        _LOGGER.debug("_start_pairing: existing pairing state check returned %s", state)
 
         if state == pairing.STATE_VERIFIED:
+            _LOGGER.debug("_start_pairing: already VERIFIED, skipping straight to pair_verified")
             return await self.async_step_pair_verified()
 
         # Either no registration exists yet, or one does but isn't VERIFIED
@@ -373,12 +439,14 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         # confirmation window, necessary on a retry - an old PENDING
         # registration whose window already lapsed needs a fresh one before
         # prompting the user to toggle the breaker again.
+        _LOGGER.debug("_start_pairing: registering the key with Teslemetry")
         try:
             await pairing.async_register_key(site_api, self._pair_keypair)
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Registering the pairing key with Teslemetry failed: %s", err)
             return self.async_abort(reason="pair_register_failed")
 
+        _LOGGER.debug("_start_pairing: registered OK, showing breaker-toggle confirmation")
         return await self.async_step_pair_confirm()
 
     async def async_step_pair_confirm(
@@ -402,9 +470,11 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         module-level comment above _remove_if_exists for that window's
         source).
         """
+        _LOGGER.debug("async_step_pair_confirm: entered, user_input=%s", user_input)
         assert self._pair_keypair is not None and self._pair_site is not None
 
         if user_input is None:
+            _LOGGER.debug("async_step_pair_confirm: showing breaker-toggle prompt")
             return self.async_show_form(
                 step_id="pair_confirm",
                 data_schema=vol.Schema({}),
@@ -417,12 +487,15 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("Pairing poll attempt failed, will retry on next submit: %s", err)
             state = None
+        _LOGGER.debug("async_step_pair_confirm: poll returned state=%s", state)
 
         if state == pairing.STATE_VERIFIED:
             # Deliberately a separate step, not called inline here - see
             # async_step_pair_verified's own docstring for why.
+            _LOGGER.debug("async_step_pair_confirm: VERIFIED, moving to pair_verified")
             return await self.async_step_pair_verified()
 
+        _LOGGER.debug("async_step_pair_confirm: not verified yet, showing pair_pending")
         return self.async_show_form(
             step_id="pair_confirm",
             data_schema=vol.Schema({}),
@@ -458,9 +531,11 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         Gateway's LAN IP directly (needed for manual gateway-password
         setup anyway, so this isn't new information to ask for).
         """
+        _LOGGER.debug("async_step_pair_verified: entered, user_input=%s", user_input)
         assert self._pair_keypair is not None
 
         if user_input is None:
+            _LOGGER.debug("async_step_pair_verified: showing checkpoint form")
             return self.async_show_form(
                 step_id="pair_verified",
                 data_schema=vol.Schema({}),
@@ -482,11 +557,15 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             site_api = getattr(self._pair_site, "api", None)
 
+            _LOGGER.debug("async_step_pair_verified: looking up DIN via async_get_din")
             din = await pairing.async_get_din(site_api)
+            _LOGGER.debug("async_step_pair_verified: async_get_din returned %s", din)
             if not din:
+                _LOGGER.debug("async_step_pair_verified: no DIN, aborting pair_din_failed")
                 return self.async_abort(reason="pair_din_failed")
             self._pair_din = din
 
+            _LOGGER.debug("async_step_pair_verified: DIN found, moving to pairing_battery_specs")
             return await self.async_step_pairing_battery_specs()
         except Exception:
             _LOGGER.exception("Unexpected error in async_step_pair_verified")
@@ -507,6 +586,9 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         could equally be coming from, and there's no way to tell from the
         user's side which of the two steps it actually happened in.
         """
+        # No password field in this step's schema (v1r needs none), so
+        # user_input is safe to log as-is - unlike async_step_powerwall.
+        _LOGGER.debug("async_step_pairing_battery_specs: entered, user_input=%s", user_input)
         assert self._pair_keypair is not None and self._pair_din is not None
         errors: dict[str, str] = {}
         key_path: str | None = None
@@ -515,6 +597,10 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
             if user_input is not None:
                 host = user_input[CONF_GATEWAY_HOST]
                 key_path = self.hass.config.path(DOMAIN, f"pairing_verify_{self.flow_id}.pem")
+                _LOGGER.debug(
+                    "async_step_pairing_battery_specs: verifying local v1r connectivity at %s",
+                    host,
+                )
 
                 def _write_temp_key() -> None:
                     os.makedirs(os.path.dirname(key_path), exist_ok=True)
@@ -546,6 +632,10 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                         _LOGGER.error("Local v1r verify failed: %s", err)
                         errors["base"] = "unknown"
                     else:
+                        _LOGGER.debug(
+                            "async_step_pairing_battery_specs: local v1r connect OK at %s, creating entry",
+                            host,
+                        )
                         await client.async_close()
                         await self.async_set_unique_id(
                             f"{self._data[CONF_CORE_ENTRY_ID]}_{host}"
@@ -572,6 +662,9 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                     # only ever existed for this connectivity check.
                     await self.hass.async_add_executor_job(_remove_if_exists, key_path)
 
+            _LOGGER.debug(
+                "async_step_pairing_battery_specs: showing form, errors=%s", errors
+            )
             return self.async_show_form(
                 step_id="pairing_battery_specs",
                 data_schema=vol.Schema(
@@ -606,6 +699,7 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
         self, entry_data: dict[str, Any]
     ) -> ConfigFlowResult:
         """Triggered when the Gateway starts rejecting our password."""
+        _LOGGER.debug("async_step_reauth: entered for entry_id=%s", self.context.get("entry_id"))
         self._reauth_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
@@ -614,11 +708,19 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        _LOGGER.debug(
+            "async_step_reauth_confirm: entered, user_input=%s",
+            {**user_input, CONF_GATEWAY_PASSWORD: "***"} if user_input else None,
+        )
         errors: dict[str, str] = {}
         entry = self._reauth_entry
         assert entry is not None
 
         if user_input is not None:
+            _LOGGER.debug(
+                "async_step_reauth_confirm: verifying new password against %s",
+                entry.data[CONF_GATEWAY_HOST],
+            )
             client = PowerwallClient(
                 self.hass,
                 host=entry.data[CONF_GATEWAY_HOST],
@@ -644,11 +746,13 @@ class LibrePowerPowerwallConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.error("Reauth verify failed: %s", err)
                 errors["base"] = "unknown"
             else:
+                _LOGGER.debug("async_step_reauth_confirm: new password verified OK")
                 await client.async_close()
                 return self.async_update_reload_and_abort(
                     entry, data={**entry.data, **user_input}
                 )
 
+        _LOGGER.debug("async_step_reauth_confirm: showing form, errors=%s", errors)
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=vol.Schema({vol.Required(CONF_GATEWAY_PASSWORD): str}),
@@ -672,10 +776,13 @@ class LibrePowerPowerwallOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        _LOGGER.debug("OptionsFlow.async_step_init: entered, user_input=%s", user_input)
         if user_input is not None:
+            _LOGGER.debug("OptionsFlow.async_step_init: saving options %s", user_input)
             return self.async_create_entry(data=user_input)
 
         current = self.config_entry.options
+        _LOGGER.debug("OptionsFlow.async_step_init: showing form, current options=%s", current)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(

@@ -68,6 +68,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         DEFAULT_CONTROL_ENABLED,
     )
 
+    _LOGGER.debug("async_setup_entry: entered for entry_id=%s", entry.entry_id)
     core_entry_id = entry.data[CONF_CORE_ENTRY_ID]
     core_entry = hass.config_entries.async_get_entry(core_entry_id)
     control_enabled = (
@@ -100,8 +101,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     max_islanding_hours_per_day = entry.options.get(
         CONF_MAX_ISLANDING_HOURS_PER_DAY, DEFAULT_MAX_ISLANDING_HOURS_PER_DAY
     )
+    _LOGGER.debug(
+        "async_setup_entry: control_enabled=%s min_soc_for_islanding=%s max_islanding_hours_per_day=%s",
+        control_enabled,
+        min_soc_for_islanding,
+        max_islanding_hours_per_day,
+    )
 
     rsa_key_path = await _async_ensure_rsa_key_file(hass, entry)
+    _LOGGER.debug(
+        "async_setup_entry: connecting to host=%s v1r=%s",
+        entry.data.get(CONF_GATEWAY_HOST),
+        bool(rsa_key_path),
+    )
 
     client = PowerwallClient(
         hass,
@@ -130,9 +142,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await client.async_connect()
     except PowerwallAuthError as err:
+        _LOGGER.debug("async_setup_entry: auth failed: %s", err)
         raise ConfigEntryAuthFailed(str(err)) from err
     except PowerwallError as err:
+        _LOGGER.debug("async_setup_entry: connect failed, will retry: %s", err)
         raise ConfigEntryNotReady(f"Cannot reach Powerwall: {err}") from err
+    _LOGGER.debug("async_setup_entry: connected OK, registering with core entry %s", core_entry_id)
 
     try:
         await async_register_battery(hass, core_entry_id, client)
@@ -170,6 +185,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await hass.config_entries.async_reload(entry.entry_id)
 
         entry.async_on_unload(core_entry.add_update_listener(_reload_this_entry))
+    _LOGGER.debug("async_setup_entry: setup complete for entry_id=%s", entry.entry_id)
     return True
 
 
@@ -179,6 +195,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     gone - see core's async_register_battery/async_unregister_battery
     docstrings for the detail.
     """
+    _LOGGER.debug("async_unload_entry: entered for entry_id=%s", entry.entry_id)
     client = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if client is not None:
         from custom_components.librepower import async_unregister_battery
@@ -187,10 +204,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass, entry.data[CONF_CORE_ENTRY_ID], client
         )
         await client.async_close()
+        _LOGGER.debug("async_unload_entry: unregistered from core and closed client")
+    else:
+        _LOGGER.debug("async_unload_entry: no client found for entry_id=%s", entry.entry_id)
     return True
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    _LOGGER.debug("_async_reload_entry: reloading entry_id=%s", entry.entry_id)
     await hass.config_entries.async_reload(entry.entry_id)
 
 
@@ -209,6 +230,7 @@ async def _async_ensure_rsa_key_file(hass: HomeAssistant, entry: ConfigEntry) ->
     """
     pem = entry.data.get(CONF_RSA_PRIVATE_KEY_PEM)
     if not pem:
+        _LOGGER.debug("_async_ensure_rsa_key_file: no paired key on this entry, gateway-password mode")
         return None
 
     key_dir = hass.config.path(DOMAIN)
@@ -223,4 +245,5 @@ async def _async_ensure_rsa_key_file(hass: HomeAssistant, entry: ConfigEntry) ->
             f.write(pem)
 
     await hass.async_add_executor_job(_write)
+    _LOGGER.debug("_async_ensure_rsa_key_file: wrote paired key to %s", key_path)
     return key_path

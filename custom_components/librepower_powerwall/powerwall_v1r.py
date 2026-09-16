@@ -110,6 +110,7 @@ class V1rClient:
 
     def __init__(self, host: str, rsa_key_path: str, din: str, timeout: int = 10) -> None:
         self._din = din
+        _LOGGER.debug("V1rClient.__init__: host=%s din=%s", host, din)
         # TEDAPIv1r's constructor signature requires a `password` argument,
         # but nothing that matters here ever reads it - see module docstring.
         # login()/get_din() (the only methods that do) are never called.
@@ -120,6 +121,7 @@ class V1rClient:
         )
 
     def close(self) -> None:
+        _LOGGER.debug("V1rClient.close: entered")
         session = getattr(self._transport, "session", None)
         if session is not None:
             session.close()
@@ -134,9 +136,21 @@ class V1rClient:
                 "No response to DeviceControllerQuery - RSA key may not be "
                 "VERIFIED yet, or the Gateway is unreachable at this host"
             )
-        return _parse_snapshot(data)
+        snapshot = _parse_snapshot(data)
+        _LOGGER.debug(
+            "get_snapshot: soc=%s solar_w=%.0f battery_w=%.0f grid_w=%.0f load_w=%.0f grid_connected=%s alerts=%s",
+            snapshot.soc,
+            snapshot.solar_w,
+            snapshot.battery_w,
+            snapshot.grid_w,
+            snapshot.load_w,
+            snapshot.grid_connected,
+            snapshot.alerts,
+        )
+        return snapshot
 
     def _query(self, role: Any) -> dict[str, Any] | None:
+        _LOGGER.debug("_query: entered, role=%s", role)
         from pypowerwall.tedapi import tedapi_pb2
         from pypowerwall.tedapi.queries import apply_query, get_query
 
@@ -156,16 +170,20 @@ class V1rClient:
 
         inner = self._transport.post_v1r(envelope_bytes, self._din)
         if inner is None:
+            _LOGGER.debug("_query: post_v1r returned no response")
             return None
 
         envelope = tedapi_pb2.MessageEnvelope()
         envelope.ParseFromString(inner)
         if not envelope.HasField("payload"):
+            _LOGGER.debug("_query: response envelope has no payload field")
             return None
         try:
-            return json.loads(envelope.payload.recv.text)
+            result = json.loads(envelope.payload.recv.text)
         except (json.JSONDecodeError, ValueError) as err:
             raise V1rError(f"DeviceControllerQuery returned non-JSON payload: {err}") from err
+        _LOGGER.debug("_query: parsed JSON payload OK")
+        return result
 
     def get_reserve(self) -> float | None:
         """Current backup reserve, 0-100 Tesla-app scale - same scale
@@ -179,38 +197,51 @@ class V1rClient:
         """
         config = self._transport.get_config_v1r(self._din)
         if not config:
+            _LOGGER.debug("get_reserve: config.json unavailable (key not VERIFIED yet?)")
             return None
         raw = (config.get("site_info") or {}).get("backup_reserve_percent")
         if raw is None:
+            _LOGGER.debug("get_reserve: no backup_reserve_percent in config")
             return None
-        return max(0.0, (float(raw) - _RESERVE_APP_TO_RAW_OFFSET) / _RESERVE_APP_TO_RAW_SCALE)
+        value = max(0.0, (float(raw) - _RESERVE_APP_TO_RAW_OFFSET) / _RESERVE_APP_TO_RAW_SCALE)
+        _LOGGER.debug("get_reserve: raw=%s -> app_percent=%.1f", raw, value)
+        return value
 
     # -- writes -------------------------------------------------------------
 
     def set_reserve(self, app_percent: float) -> bool:
         """Backup reserve, 0-100 Tesla-app scale (same scale powerwall.py uses)."""
         raw = app_percent * _RESERVE_APP_TO_RAW_SCALE + _RESERVE_APP_TO_RAW_OFFSET
+        _LOGGER.debug("set_reserve: app_percent=%.1f -> raw=%.1f", app_percent, raw)
         return self._write_config({"site_info.backup_reserve_percent": raw})
 
     def set_mode(self, mode: str) -> bool:
+        _LOGGER.debug("set_mode: mode=%s", mode)
         return self._write_config({"default_real_mode": mode})
 
     def set_grid_export(self, mode: str) -> bool:
         if mode not in ("battery_ok", "pv_only", "never"):
             raise ValueError(f"Invalid grid export mode: {mode}")
+        _LOGGER.debug("set_grid_export: mode=%s", mode)
         return self._write_config({"site_info.customer_preferred_export_rule": mode})
 
     def _write_config(self, updates: dict[str, Any]) -> bool:
+        _LOGGER.debug("_write_config: updates=%s", updates)
         result = self._transport.write_config_v1r(self._din, updates)
+        _LOGGER.debug("_write_config: result=%s", bool(result))
         return bool(result)
 
     def go_off_grid(self) -> bool:
         """Intentional islanding - same signed command as pypowerwall's go_off_grid()."""
+        _LOGGER.debug("go_off_grid: entered")
         result = self._transport.send_island_mode(self._din, mode=6, force=True)
+        _LOGGER.debug("go_off_grid: result=%s", bool(result))
         return bool(result)
 
     def reconnect_grid(self) -> bool:
+        _LOGGER.debug("reconnect_grid: entered")
         result = self._transport.send_island_mode(self._din, mode=1)
+        _LOGGER.debug("reconnect_grid: result=%s", bool(result))
         return bool(result)
 
 
